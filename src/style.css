@@ -421,3 +421,81 @@ svg {
     grid-template-columns: 1fr;
   }
 }
+
+/* Keyboard focus */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Help */
+.help {
+  max-width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.help::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+.help h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.help h3 {
+  margin: 14px 0 4px;
+  font-size: 15px;
+}
+
+.help ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+
+.help dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.help dt {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.help dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+.help form {
+  margin-top: 16px;
+  text-align: right;
+}
+
+@media (max-width: 420px) {
+  .topbar {
+    padding: 8px;
+  }
+
+  .brand {
+    font-size: 15px;
+  }
+
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .topbar-actions .btn {
+    padding: 8px 10px;
+  }
+}

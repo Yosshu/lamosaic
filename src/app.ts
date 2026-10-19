@@ -75,6 +75,8 @@ export class App {
   private checking = false;
   private thinOverlay: HTMLCanvasElement | null = null;
   private sourceFormat: ExportFormat = 'jpeg';
+  /** True when there is paint that has not been saved yet. */
+  private unsaved = false;
   private readonly root: HTMLElement;
   private readonly fileInput: HTMLInputElement;
   private readonly status: HTMLElement;
@@ -95,6 +97,7 @@ export class App {
       color: () => this.pickedColor,
       strokeEnded: (record) => {
         this.history?.push(record);
+        this.unsaved = true;
         this.afterPaintChange();
       },
       flush: () => this.flushEngine(),
@@ -139,6 +142,7 @@ export class App {
           <div class="topbar-actions">
             <button type="button" class="btn btn-icon" data-action="undo" aria-label="取り消し" title="取り消し (⌘/Ctrl+Z)" disabled>${ICON.undo}</button>
             <button type="button" class="btn btn-icon" data-action="redo" aria-label="やり直し" title="やり直し (⇧+⌘/Ctrl+Z)" disabled>${ICON.redo}</button>
+            <button type="button" class="btn btn-icon" data-action="help" aria-label="使い方" title="使い方">?</button>
             <button type="button" class="btn" data-action="open">開く</button>
             <button type="button" class="btn btn-primary" data-action="save" disabled>保存</button>
           </div>
@@ -175,6 +179,23 @@ export class App {
           <p class="hint"></p>
         </section>
         <input type="file" accept="image/*" hidden />
+        <dialog class="help" aria-labelledby="help-title">
+          <h2 id="help-title">使い方</h2>
+          <ol>
+            <li>写真を開いて、顔の上を指（マウス・ペン）でなぞります。周りの色を拾って塗ります。</li>
+            <li>何本か重ねると隠れていきます。「透けチェック」でピンクに光る所は、まだ透けています。</li>
+            <li>種類（クレヨン・ふんわり・パステル・まだら）は途中で切り替えて混ぜられます。</li>
+            <li>「おまかせ下塗り」で目元や顔全体をまとめて塗れます。仕上げは指で。</li>
+            <li>保存すると、位置情報などは消えた画像になります。写真は端末の外に送られません。</li>
+          </ol>
+          <h3>操作</h3>
+          <dl>
+            <dt>2本指</dt><dd>ピンチで拡大・縮小、ドラッグで移動、すばやくタップで取り消し</dd>
+            <dt>Apple Pencil</dt><dd>ペンで塗り、指は移動だけになります</dd>
+            <dt>パソコン</dt><dd>ホイールで拡大、スペース＋ドラッグで移動、⌘/Ctrl+Z で取り消し、[ ] でサイズ、1〜4 で種類</dd>
+          </dl>
+          <form method="dialog"><button class="btn btn-primary">閉じる</button></form>
+        </dialog>
       </div>
     `;
   }
@@ -193,6 +214,12 @@ export class App {
     this.q('[data-action=undo]').addEventListener('click', () => this.undo());
     this.q('[data-action=redo]').addEventListener('click', () => this.redo());
     this.q('[data-action=fit]').addEventListener('click', () => this.view.fit());
+    this.q('[data-action=help]').addEventListener('click', () =>
+      this.q<HTMLDialogElement>('dialog.help').showModal(),
+    );
+    window.addEventListener('beforeunload', (e) => {
+      if (this.unsaved) e.preventDefault();
+    });
     this.q('[data-action=check]').addEventListener('click', () => this.setChecking(!this.checking));
 
     // Compare: show the original only while the button is held.
@@ -302,6 +329,9 @@ export class App {
   }
 
   async open(file: Blob): Promise<void> {
+    if (this.unsaved && !window.confirm('保存していない塗りがあります。新しい写真を開きますか？')) {
+      return;
+    }
     this.setStatus('読み込み中…', false);
     try {
       const canvas = await loadImageFile(file);
@@ -314,6 +344,7 @@ export class App {
       this.view.setDocument(this.doc);
       this.q<HTMLElement>('.app').dataset.empty = 'false';
       this.q<HTMLButtonElement>('[data-action=save]').disabled = false;
+      this.unsaved = false;
       this.afterPaintChange();
       this.setStatus('');
     } catch (error) {
@@ -331,6 +362,7 @@ export class App {
     try {
       const blob = await encodeCanvas(this.doc.composite(), format);
       const result = await saveBlob(blob, exportFileName(format));
+      this.unsaved = false;
       if (result === 'downloaded') this.setStatus('保存しました');
     } catch (error) {
       console.error(error);
@@ -393,6 +425,7 @@ export class App {
       }
     }
     history.push(merged);
+    this.unsaved = true;
     this.flushEngine();
     this.afterPaintChange();
   }
