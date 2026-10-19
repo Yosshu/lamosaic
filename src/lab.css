@@ -1,0 +1,47 @@
+body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+}
+
+#lab {
+  height: 100dvh;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  font-size: 12px;
+}
+
+#lab h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+.lab-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 52px;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.lab-row output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lab-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+#lab textarea {
+  width: 100%;
+  font:
+    11px ui-monospace,
+    monospace;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+}

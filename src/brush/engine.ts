@@ -1,4 +1,3 @@
-import type { PaintDocument } from '../canvas/document';
 import { TILE_SIZE, TileGrid, type TileSet } from '../canvas/history';
 import { clipToBounds, union, type Rect } from '../canvas/rect';
 import type { StrokeSample } from '../input/strokePath';
@@ -13,36 +12,62 @@ import {
 } from './noise';
 import type { BrushParams } from './params';
 
+/** The parts of the document the engine needs: original pixels to pick colors from and the paint layer. */
+export interface PixelDocument {
+  readonly width: number;
+  readonly height: number;
+  readonly originalPixels: Uint8ClampedArray;
+  readonly paint: Uint8ClampedArray;
+}
+
 const BRISTLE_LENGTH = 512;
 const WOBBLE_LENGTH = 1024;
+const TEX_MASK = TEXTURE_SIZE - 1;
 
-interface Segment {
+const enum Part {
+  /** The ribbon between two cross-sections. */
+  Body,
+  /** The fade behind the first sample. */
+  StartCap,
+  /** The fade beyond the last sample. */
+  EndCap,
+}
+
+/** A piece of ribbon. For caps, only `a` and its tangent are used. */
+interface Piece {
+  part: Part;
   ax: number;
   ay: number;
+  /** Unit tangent at a. */
+  atx: number;
+  aty: number;
   bx: number;
   by: number;
-  /** Half widths at both ends. */
+  /** Unit tangent at b. */
+  btx: number;
+  bty: number;
+  /** Half widths at a and b. */
   ha: number;
   hb: number;
-  /** Arc length at both ends. */
+  /** Arc length at a and b. */
   sa: number;
   sb: number;
   color: RGB;
-  /** Whether this is the first segment (gets the start fade). */
-  first: boolean;
 }
 
 /**
  * Paints one stroke at a time into the document's paint layer.
  *
- * A stroke is a flat ribbon swept along the path. Rasterising produces a coverage value per
- * pixel (max-combined, so overlapping parts of one stroke do not get darker); the paint
- * deposited from that coverage depends on the paper texture, so the low-coverage edges and ends
- * break up into crayon-like speckles. Each pixel is shaded from the stroke-start backup of the
- * paint layer, which also becomes the undo record.
+ * A stroke is a flat ribbon swept along the path. Consecutive samples bound a piece of ribbon
+ * between their cross-sections, so pieces tile the ribbon without gaps or overdraw; the start
+ * and the end get a fading cap. Rasterising produces a coverage value per pixel (max-combined,
+ * so overlapping parts of one stroke do not get darker); the paint deposited from that coverage
+ * depends on the paper texture, so the low-coverage edges and ends break up into crayon-like
+ * speckles. Each pixel is shaded from the stroke-start backup of the paint layer, which also
+ * becomes the undo record.
  */
 export class BrushEngine {
-  private readonly doc: PaintDocument;
+  private readonly doc: PixelDocument;
   readonly grid: TileGrid;
   private readonly paper: Texture;
   private readonly cloud: Texture;
@@ -63,7 +88,7 @@ export class BrushEngine {
   private dirty: Rect | null = null;
   private strokeCount = 0;
 
-  constructor(doc: PaintDocument, seed = 1) {
+  constructor(doc: PixelDocument, seed = 1) {
     this.doc = doc;
     this.grid = new TileGrid(doc.width, doc.height);
     this.paper = paperTexture(seed);
@@ -118,7 +143,8 @@ export class BrushEngine {
         );
         this.color = mixRgb(this.color, styleColor(under, params), step);
       }
-      this.drawSegment(prev, sample, this.samples.length === 2);
+      if (this.samples.length === 2) this.rasterize(this.piece(Part.StartCap, prev, prev));
+      this.rasterize(this.piece(Part.Body, prev, sample));
     }
   }
 
@@ -130,35 +156,32 @@ export class BrushEngine {
     if (!this.params) return;
     this.restoreBackup();
     this.coverage = new Map();
-    const seedState = this.samples.length > 0;
+    const hadSamples = this.samples.length > 0;
+    const color = this.color;
     this.samples = [];
-    if (seedState) {
-      // Keep the color picked at the first sample so the stroke does not flicker.
-      const color = this.color;
-      this.add(samples.slice(0, 1));
-      this.color = color;
-      this.add(samples.slice(1));
-    } else {
-      this.add(samples);
-    }
+    this.add(samples.slice(0, 1));
+    // Keep the color picked at the first sample so the stroke does not flicker.
+    if (hadSamples) this.color = color;
+    this.add(samples.slice(1));
   }
 
   /** Ends the stroke and returns the undo record. A single tap leaves a short dab. */
   end(): TileSet {
-    const params = this.params;
-    if (params && this.samples.length === 1) {
-      const s = this.samples[0] as StrokeSample;
-      const len = this.halfWidth * 0.6;
-      this.drawSegment(
-        { ...s, x: s.x - Math.cos(s.angle) * len * 0.5, y: s.y - Math.sin(s.angle) * len * 0.5 },
-        {
-          ...s,
-          x: s.x + Math.cos(s.angle) * len * 0.5,
-          y: s.y + Math.sin(s.angle) * len * 0.5,
-          distance: len,
-        },
-        true,
-      );
+    if (this.params) {
+      const last = this.samples[this.samples.length - 1];
+      if (this.samples.length === 1 && last) {
+        const len = this.halfWidth * 0.6;
+        const cos = Math.cos(last.angle);
+        const sin = Math.sin(last.angle);
+        const a = { ...last, x: last.x - cos * len * 0.5, y: last.y - sin * len * 0.5 };
+        const b = { ...last, x: last.x + cos * len * 0.5, y: last.y + sin * len * 0.5 };
+        b.distance = len;
+        this.rasterize(this.piece(Part.StartCap, a, a));
+        this.rasterize(this.piece(Part.Body, a, b));
+        this.rasterize(this.piece(Part.EndCap, b, b));
+      } else if (last) {
+        this.rasterize(this.piece(Part.EndCap, last, last));
+      }
     }
     const record = this.backup;
     this.params = null;
@@ -168,17 +191,14 @@ export class BrushEngine {
     return record;
   }
 
-  /** Aborts the stroke and restores the paint layer. Returns the region to redraw. */
-  cancel(): Rect | null {
-    if (!this.params) return null;
-    let region: Rect | null = null;
-    for (const index of this.backup.keys()) region = union(region, this.grid.tileRect(index));
+  /** Aborts the stroke and restores the paint layer. */
+  cancel(): void {
+    if (!this.params) return;
     this.restoreBackup();
     this.params = null;
     this.backup = new Map();
     this.coverage = new Map();
     this.samples = [];
-    return region;
   }
 
   /** Returns and clears the region changed since the last call. */
@@ -186,19 +206,6 @@ export class BrushEngine {
     const d = this.dirty;
     this.dirty = null;
     return d;
-  }
-
-  private restoreBackup(): void {
-    for (const [index, data] of this.backup) {
-      this.grid.write(this.doc.paint, index, data);
-      this.dirty = union(this.dirty, this.grid.tileRect(index));
-    }
-  }
-
-  private startColor(sample: StrokeSample, params: BrushParams): RGB {
-    const radius = Math.max(1, params.sampleRadius * this.halfWidth * 2);
-    const picked = this.sampleColor(sample.x, sample.y, radius, params);
-    return jitterColor(styleColor(picked, params), params.colorJitter, this.rng);
   }
 
   /** Average color in a disk, from the original photo or the visible composite. */
@@ -235,85 +242,144 @@ export class BrushEngine {
     return [r / n, g / n, b / n];
   }
 
+  private restoreBackup(): void {
+    for (const [index, data] of this.backup) {
+      this.grid.write(this.doc.paint, index, data);
+      this.dirty = union(this.dirty, this.grid.tileRect(index));
+    }
+  }
+
+  private startColor(sample: StrokeSample, params: BrushParams): RGB {
+    const radius = Math.max(1, params.sampleRadius * this.halfWidth * 2);
+    const picked = this.sampleColor(sample.x, sample.y, radius, params);
+    return jitterColor(styleColor(picked, params), params.colorJitter, this.rng);
+  }
+
   private pressureScale(p: number): number {
     return 0.55 + 0.9 * Math.min(1, Math.max(0, p));
   }
 
-  private drawSegment(a: StrokeSample, b: StrokeSample, first: boolean): void {
-    this.rasterize({
+  private piece(part: Part, a: StrokeSample, b: StrokeSample): Piece {
+    return {
+      part,
       ax: a.x,
       ay: a.y,
+      atx: Math.cos(a.angle),
+      aty: Math.sin(a.angle),
       bx: b.x,
       by: b.y,
+      btx: Math.cos(b.angle),
+      bty: Math.sin(b.angle),
       ha: this.halfWidth * this.pressureScale(a.pressure),
       hb: this.halfWidth * this.pressureScale(b.pressure),
       sa: a.distance,
       sb: b.distance,
       color: this.color,
-      first,
-    });
+    };
   }
 
-  private rasterize(seg: Segment): void {
+  private rasterize(p: Piece): void {
     const params = this.params as BrushParams;
     const { width, height, paint } = this.doc;
-    const dx = seg.bx - seg.ax;
-    const dy = seg.by - seg.ay;
-    const len = Math.hypot(dx, dy);
-    const tx = len > 1e-6 ? dx / len : 1;
-    const ty = len > 1e-6 ? dy / len : 0;
+    const fullWidth = this.halfWidth * 2;
+    const wobble = params.edgeWobble;
+    const feather = Math.max(1, params.endFeather * fullWidth);
+
+    // Direction and normal of the piece.
+    let tx: number;
+    let ty: number;
+    let len: number;
+    if (p.part === Part.Body) {
+      const dx = p.bx - p.ax;
+      const dy = p.by - p.ay;
+      len = Math.hypot(dx, dy);
+      tx = len > 1e-6 ? dx / len : p.atx;
+      ty = len > 1e-6 ? dy / len : p.aty;
+    } else {
+      len = 0;
+      tx = p.atx;
+      ty = p.aty;
+    }
     const nx = -ty;
     const ny = tx;
-    const hmax = Math.max(seg.ha, seg.hb) * (1 + params.edgeWobble);
-    const fullWidth = this.halfWidth * 2;
-    const feather = Math.max(1, params.endFeather * fullWidth);
-    // The tail only fades on the first segment; later segments overlap the previous one a bit.
-    const back = seg.first ? feather : 1.5;
-    const ahead = feather;
 
-    // Corners of the rotated rectangle covering the segment plus its fades.
-    const corners: Array<[number, number]> = [];
-    for (const along of [-back, len + ahead]) {
-      for (const across of [-hmax, hmax]) {
-        corners.push([seg.ax + tx * along + nx * across, seg.ay + ty * along + ny * across]);
-      }
+    // Outline used to find the pixel span on each row.
+    const grow = 1 + wobble + 0.02;
+    let poly: number[];
+    if (p.part === Part.Body) {
+      const ha = p.ha * grow;
+      const hb = p.hb * grow;
+      poly = [
+        p.ax - p.aty * ha,
+        p.ay + p.atx * ha,
+        p.bx - p.bty * hb,
+        p.by + p.btx * hb,
+        p.bx + p.bty * hb,
+        p.by - p.btx * hb,
+        p.ax + p.aty * ha,
+        p.ay - p.atx * ha,
+      ];
+    } else {
+      const h = p.ha * grow;
+      const sign = p.part === Part.StartCap ? -1 : 1;
+      const fx = p.ax + tx * feather * sign;
+      const fy = p.ay + ty * feather * sign;
+      poly = [
+        p.ax + nx * h,
+        p.ay + ny * h,
+        fx + nx * h,
+        fy + ny * h,
+        fx - nx * h,
+        fy - ny * h,
+        p.ax - nx * h,
+        p.ay - ny * h,
+      ];
     }
-    const xs = corners.map((c) => c[0]);
-    const ys = corners.map((c) => c[1]);
+    let minPX = Infinity;
+    let minPY = Infinity;
+    let maxPX = -Infinity;
+    let maxPY = -Infinity;
+    for (let i = 0; i < 8; i += 2) {
+      const x = poly[i] as number;
+      const y = poly[i + 1] as number;
+      if (x < minPX) minPX = x;
+      if (x > maxPX) maxPX = x;
+      if (y < minPY) minPY = y;
+      if (y > maxPY) maxPY = y;
+    }
     const bounds = clipToBounds(
-      {
-        x: Math.min(...xs),
-        y: Math.min(...ys),
-        width: Math.max(...xs) - Math.min(...xs),
-        height: Math.max(...ys) - Math.min(...ys),
-      },
+      { x: minPX, y: minPY, width: maxPX - minPX, height: maxPY - minPY },
       width,
       height,
     );
     if (bounds.width <= 0 || bounds.height <= 0) return;
-    // Polygon edges in winding order for per-row spans.
-    const poly: Array<[number, number]> = [
-      corners[0] as [number, number],
-      corners[1] as [number, number],
-      corners[3] as [number, number],
-      corners[2] as [number, number],
-    ];
 
+    const part = p.part;
     const soft = Math.max(0.02, params.edgeSoftness);
-    const wobble = params.edgeWobble;
+    const hardEdge = 1 - soft;
     const taper = Math.max(1, params.startTaper * fullWidth);
     const grain = params.grain;
     const contrast = params.grainContrast;
     const grainStep = 1 / Math.max(0.25, params.grainScale * this.shortSide);
-    const cloudStep = (1 / Math.max(1, params.mottleScale * fullWidth)) * 8;
+    const cloudStep = 8 / Math.max(1, params.mottleScale * fullWidth);
     const bristle = params.bristle;
-    const mottle = params.mottle;
+    const mottle = params.mottle * 0.5;
     const underlay = params.underlay;
     const opacity = params.opacity;
-    const [cr, cg, cb] = seg.color;
+    const [cr, cg, cb] = p.color;
     const wobbleScale = WOBBLE_LENGTH / Math.max(1, fullWidth * 6);
     const goX = this.grainOffsetX;
     const goY = this.grainOffsetY;
+    const paperData = this.paper.data;
+    const cloud = this.cloud;
+    const bristles = this.bristles;
+    const wobbleL = this.wobbleL;
+    const wobbleR = this.wobbleR;
+    const { ax, ay, bx, by, atx, aty, btx, bty, ha, hb, sa, sb } = p;
+    const invLen = len > 1e-6 ? 1 / len : 0;
+    const invFeather = 1 / feather;
+    const invTaper = 1 / taper;
+    const invSoft = 1 / soft;
 
     for (const tileIndex of this.grid.tilesIn(bounds)) {
       const tile = this.grid.tileRect(tileIndex);
@@ -331,76 +397,113 @@ export class BrushEngine {
       const y1 = Math.min(bounds.y + bounds.height, tile.y + tile.height);
       const tx0 = Math.max(bounds.x, tile.x);
       const tx1 = Math.min(bounds.x + bounds.width, tile.x + tile.width);
+      const tileW = tile.width;
       for (let y = y0; y < y1; y++) {
         const py = y + 0.5;
-        // Span of the polygon on this row.
-        let minX = Infinity;
-        let maxX = -Infinity;
-        for (let e = 0; e < 4; e++) {
-          const p = poly[e] as [number, number];
-          const q = poly[(e + 1) % 4] as [number, number];
-          if ((p[1] <= py && q[1] > py) || (q[1] <= py && p[1] > py)) {
-            const x = p[0] + ((py - p[1]) / (q[1] - p[1])) * (q[0] - p[0]);
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
+        let spanMin = Infinity;
+        let spanMax = -Infinity;
+        for (let e = 0; e < 8; e += 2) {
+          const px0 = poly[e] as number;
+          const py0 = poly[e + 1] as number;
+          const px1 = poly[(e + 2) % 8] as number;
+          const py1 = poly[(e + 3) % 8] as number;
+          if ((py0 <= py && py1 > py) || (py1 <= py && py0 > py)) {
+            const x = px0 + ((py - py0) / (py1 - py0)) * (px1 - px0);
+            if (x < spanMin) spanMin = x;
+            if (x > spanMax) spanMax = x;
           }
         }
-        if (minX > maxX) continue;
-        const x0 = Math.max(tx0, Math.floor(minX));
-        const x1 = Math.min(tx1, Math.ceil(maxX));
+        if (spanMin > spanMax) continue;
+        const x0 = Math.max(tx0, Math.floor(spanMin));
+        const x1 = Math.min(tx1, Math.ceil(spanMax));
+        const ly = y - tile.y;
         for (let x = x0; x < x1; x++) {
           const px = x + 0.5;
-          const rx = px - seg.ax;
-          const ry = py - seg.ay;
-          const u = rx * tx + ry * ty;
-          const v = rx * nx + ry * ny;
-          const t = len > 0 ? Math.min(1, Math.max(0, u / len)) : 0;
-          const s = seg.sa + (seg.sb - seg.sa) * t + (u < 0 ? u : u > len ? u - len : 0);
-          const wi =
-            ((Math.floor(Math.max(0, s) * wobbleScale) % WOBBLE_LENGTH) + WOBBLE_LENGTH) %
-            WOBBLE_LENGTH;
-          const wob = v >= 0 ? (this.wobbleL[wi] as number) : (this.wobbleR[wi] as number);
-          const hw = (seg.ha + (seg.hb - seg.ha) * t) * (1 + wobble * (wob * 2 - 1));
-          const e = Math.abs(v) / hw;
-          if (e >= 1) continue;
-          let c = e <= 1 - soft ? 1 : 1 - smoothstep((e - (1 - soft)) / soft);
-          if (u < 0) c *= 1 - smoothstep(-u / back);
-          else if (u > len) c *= 1 - smoothstep((u - len) / ahead);
-          if (s < taper) c *= 0.35 + 0.65 * smoothstep(Math.max(0, s) / taper);
-          if (bristle > 0) {
-            const bi = Math.floor(((v / hw) * 0.5 + 0.5) * (BRISTLE_LENGTH - 1));
-            c *= 1 - bristle * (1 - (this.bristles[bi] as number));
+          const rx = px - ax;
+          const ry = py - ay;
+          let fade = 1;
+          let t = 0;
+          let s: number;
+          if (part === Part.Body) {
+            // Inside the piece: in front of a's cross-section and behind b's.
+            if (rx * atx + ry * aty < 0) continue;
+            if ((px - bx) * btx + (py - by) * bty >= 0) continue;
+            t = (rx * tx + ry * ty) * invLen;
+            if (t < 0) t = 0;
+            else if (t > 1) t = 1;
+            s = sa + (sb - sa) * t;
+          } else {
+            const u = rx * tx + ry * ty;
+            const d = part === Part.StartCap ? -u : u;
+            if (d < 0 || d >= feather) continue;
+            const f = d * invFeather;
+            fade = 1 - f * f * (3 - 2 * f);
+            s = part === Part.StartCap ? sa - d : sa + d;
           }
-          const lx = x - tile.x;
-          const ly = y - tile.y;
-          const ci = ly * TILE_SIZE + lx;
-          const value = Math.round(c * 255);
+          const v = rx * nx + ry * ny;
+          let wi = ((s > 0 ? s : 0) * wobbleScale) | 0;
+          wi %= WOBBLE_LENGTH;
+          const wob = v >= 0 ? (wobbleL[wi] as number) : (wobbleR[wi] as number);
+          const hw = (ha + (hb - ha) * t) * (1 + wobble * (wob * 2 - 1));
+          const e = (v < 0 ? -v : v) / hw;
+          if (e >= 1) continue;
+          let c = fade;
+          if (e > hardEdge) {
+            const k = (e - hardEdge) * invSoft;
+            c *= 1 - k * k * (3 - 2 * k);
+          }
+          if (s < taper) {
+            const k = (s > 0 ? s : 0) * invTaper;
+            c *= 0.35 + 0.65 * k * k * (3 - 2 * k);
+          }
+          if (bristle > 0) {
+            const bi = ((v / hw) * 0.5 + 0.5) * (BRISTLE_LENGTH - 1);
+            c *= 1 - bristle * (1 - (bristles[bi | 0] as number));
+          }
+          const ci = ly * TILE_SIZE + (x - tile.x);
+          const value = (c * 255 + 0.5) | 0;
           if (value <= (cov[ci] as number)) continue;
           cov[ci] = value;
 
-          // Paint deposit: the paper tooth decides where low coverage still leaves paint.
-          const paper = this.paper.sample(x * grainStep + goX, y * grainStep + goY);
-          let alpha = Math.min(1, Math.max(0, (c - (1 - paper) * grain) * contrast));
-          if (underlay > 0) alpha = Math.max(alpha, underlay * c);
-          alpha *= opacity;
+          // Paper tooth: bilinear sample of the tiling texture.
+          const gu = x * grainStep + goX;
+          const gv = y * grainStep + goY;
+          const fu = Math.floor(gu);
+          const fv = Math.floor(gv);
+          const du = gu - fu;
+          const dv = gv - fv;
+          const gx0 = fu & TEX_MASK;
+          const gy0 = (fv & TEX_MASK) * TEXTURE_SIZE;
+          const gx1 = (gx0 + 1) & TEX_MASK;
+          const gy1 = ((fv + 1) & TEX_MASK) * TEXTURE_SIZE;
+          const p00 = paperData[gy0 + gx0] as number;
+          const p01 = paperData[gy0 + gx1] as number;
+          const p10 = paperData[gy1 + gx0] as number;
+          const p11 = paperData[gy1 + gx1] as number;
+          const top = p00 + (p01 - p00) * du;
+          const paperValue = top + (p10 + (p11 - p10) * du - top) * dv;
+
+          let alpha = (c - (1 - paperValue) * grain) * contrast;
+          if (alpha > 1) alpha = 1;
+          if (underlay > 0 && alpha < underlay * c) alpha = underlay * c;
           if (alpha <= 0) continue;
+          alpha *= opacity;
 
           let r = cr;
           let g = cg;
           let b = cb;
           if (mottle > 0) {
-            const m = (this.cloud.sample(x * cloudStep, y * cloudStep) - 0.5) * mottle * 0.5;
-            r *= 1 + m;
-            g *= 1 + m;
-            b *= 1 + m;
+            const m = 1 + (cloud.sample(x * cloudStep, y * cloudStep) - 0.5) * mottle;
+            r *= m;
+            g *= m;
+            b *= m;
           }
-          const ti = (ly * tile.width + lx) * 4;
+          const ti = (ly * tileW + (x - tile.x)) * 4;
           const ba = (base[ti + 3] as number) / 255;
           const outA = alpha + ba * (1 - alpha);
-          const k = (y * width + x) * 4;
-          if (outA <= 0) continue;
           const wBase = (ba * (1 - alpha)) / outA;
           const wNew = alpha / outA;
+          const k = (y * width + x) * 4;
           paint[k] = r * wNew + (base[ti] as number) * wBase;
           paint[k + 1] = g * wNew + (base[ti + 1] as number) * wBase;
           paint[k + 2] = b * wNew + (base[ti + 2] as number) * wBase;
@@ -410,9 +513,4 @@ export class BrushEngine {
     }
     this.dirty = union(this.dirty, bounds);
   }
-}
-
-function smoothstep(t: number): number {
-  const x = Math.min(1, Math.max(0, t));
-  return x * x * (3 - 2 * x);
 }
