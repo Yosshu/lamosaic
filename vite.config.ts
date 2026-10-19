@@ -8,6 +8,8 @@ export default defineConfig({
   base,
   build: {
     target: 'es2022',
+    // The face detector is a large chunk, but it is only loaded when the user asks for it.
+    chunkSizeWarningLimit: 1500,
     rollupOptions: {
       input: {
         main: 'index.html',
@@ -41,7 +43,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{html,js,css,png,webmanifest}'],
+        globPatterns: ['**/*.{html,js,css,png,webmanifest,json,bin}'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallbackDenylist: [/lab\.html$/],
       },
     }),

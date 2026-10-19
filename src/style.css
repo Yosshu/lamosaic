@@ -352,6 +352,19 @@ svg {
   background: conic-gradient(#e6b8a8, #8a5a4a, #d98fa3, #c9a58c, #e6b8a8);
 }
 
+.auto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.auto-label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
 .hint {
   margin: 0;
   font-size: 12px;

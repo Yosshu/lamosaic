@@ -1,16 +1,19 @@
 import type { RGB } from './brush/color';
 import { BrushEngine } from './brush/engine';
+import { createRng } from './brush/noise';
 import type { BrushParams } from './brush/params';
 import { presetById, PRESETS, type PresetId } from './brush/presets';
 import { findThinPaint } from './canvas/coverage';
 import { PaintDocument } from './canvas/document';
-import { History } from './canvas/history';
+import { History, type TileSet } from './canvas/history';
 import { union, type Rect } from './canvas/rect';
 import { View, type Point } from './canvas/view';
 import { firstImageFile, loadImageFile, UnsupportedImageError } from './io/load';
 import { encodeCanvas, exportFileName, saveBlob, type ExportFormat } from './io/save';
+import { coverRegion, planStrokes, type CoverArea, type FaceInfo } from './face/cover';
 import { PaintController } from './input/paintController';
 import { InputRouter } from './input/router';
+import { StrokePath } from './input/strokePath';
 import { renderPresetPreview } from './ui/presetPreview';
 
 type SliderKey = 'size' | 'opacity' | 'grain' | 'mute' | 'lighten';
@@ -68,6 +71,7 @@ export class App {
   /** Color chosen with the eyedropper; null picks the color under each stroke. */
   pickedColor: RGB | null = null;
   private picking = false;
+  private detecting = false;
   private checking = false;
   private thinOverlay: HTMLCanvasElement | null = null;
   private sourceFormat: ExportFormat = 'jpeg';
@@ -163,6 +167,11 @@ export class App {
             </button>
             <button type="button" class="toggle" data-action="auto-color" hidden>自動の色に戻す</button>
           </div>
+          <div class="auto" role="group" aria-label="おまかせ下塗り">
+            <span class="auto-label">おまかせ下塗り</span>
+            <button type="button" class="toggle" data-action="auto-eyes" title="顔を見つけて目元を塗る">目元</button>
+            <button type="button" class="toggle" data-action="auto-face" title="顔を見つけて顔全体を塗る">顔全体</button>
+          </div>
           <p class="hint"></p>
         </section>
         <input type="file" accept="image/*" hidden />
@@ -223,6 +232,8 @@ export class App {
       this.syncTools();
     });
     this.q('[data-action=picker]').addEventListener('click', () => this.setPicking(!this.picking));
+    this.q('[data-action=auto-eyes]').addEventListener('click', () => void this.autoCover('eyes'));
+    this.q('[data-action=auto-face]').addEventListener('click', () => void this.autoCover('face'));
     this.q('[data-action=auto-color]').addEventListener('click', () => {
       this.pickedColor = null;
       this.setPicking(false);
@@ -335,6 +346,55 @@ export class App {
     this.params = { ...presetById(id).params };
     this.params.size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, this.params.size * scale));
     this.syncTools();
+  }
+
+  /** Finds faces on the device and paints rough strokes over the chosen area of each. */
+  async autoCover(area: CoverArea): Promise<void> {
+    if (!this.doc || this.detecting) return;
+    this.detecting = true;
+    this.setStatus('顔を探しています…', false);
+    try {
+      const { detectFaces } = await import('./face/detect');
+      const faces = await detectFaces(this.doc.original);
+      if (faces.length === 0) {
+        this.setStatus('顔が見つかりませんでした。指で塗ってください');
+        return;
+      }
+      this.paintFaces(faces, area);
+      this.setStatus(
+        faces.length === 1 ? '下塗りしました。仕上げは指で' : `${faces.length}人分を下塗りしました`,
+      );
+    } catch (error) {
+      console.error(error);
+      this.setStatus('顔を探せませんでした。指で塗ってください');
+    } finally {
+      this.detecting = false;
+    }
+  }
+
+  /** Paints planned strokes over faces as a single undo step. */
+  paintFaces(faces: FaceInfo[], area: CoverArea, seed = Date.now()): void {
+    const { doc, engine, history } = this;
+    if (!doc || !engine || !history || this.painter.painting) return;
+    const rng = createRng(seed);
+    const shortSide = Math.min(doc.width, doc.height);
+    const merged: TileSet = new Map();
+    for (const face of faces) {
+      const plan = planStrokes(coverRegion(face, area), area, rng);
+      const params = { ...this.params, size: plan.width / shortSide };
+      for (const points of plan.strokes) {
+        const path = new StrokePath(Math.max(1, plan.width * params.spacing), 0);
+        engine.begin(params, this.pickedColor);
+        for (const p of points) engine.add(path.add({ x: p.x, y: p.y, pressure: 0.5 }));
+        engine.add(path.finish());
+        for (const [index, tile] of engine.end()) {
+          if (!merged.has(index)) merged.set(index, tile);
+        }
+      }
+    }
+    history.push(merged);
+    this.flushEngine();
+    this.afterPaintChange();
   }
 
   undo(): void {
