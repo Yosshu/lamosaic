@@ -1,3 +1,4 @@
+import { VitePWA } from 'vite-plugin-pwa';
 import { defineConfig } from 'vitest/config';
 
 // GitHub Pages serves the app under /<repo>/, so the base path is injected at build time.
@@ -14,6 +15,37 @@ export default defineConfig({
       },
     },
   },
+  plugins: [
+    VitePWA({
+      registerType: 'autoUpdate',
+      injectRegister: 'auto',
+      includeAssets: ['favicon.png', 'apple-touch-icon.png'],
+      manifest: {
+        name: 'lamosaic',
+        short_name: 'lamosaic',
+        description: '写真の顔を、クレヨン風のストロークでおしゃれに隠すアプリ',
+        lang: 'ja',
+        display: 'standalone',
+        orientation: 'any',
+        background_color: '#1b1720',
+        theme_color: '#1b1720',
+        icons: [
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: 'icon-maskable-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{html,js,css,png,webmanifest}'],
+        navigateFallbackDenylist: [/lab\.html$/],
+      },
+    }),
+  ],
   test: {
     environment: 'jsdom',
     include: ['tests/unit/**/*.test.ts'],
