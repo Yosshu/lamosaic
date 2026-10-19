@@ -1,3 +1,4 @@
+import type { RGB } from '../brush/color';
 import type { BrushEngine } from '../brush/engine';
 import type { BrushParams } from '../brush/params';
 import type { View } from '../canvas/view';
@@ -9,71 +10,60 @@ export interface PaintControllerHost {
   params(): BrushParams;
   /** Straight-line strokes: the ribbon runs from the start point to the pointer. */
   straight(): boolean;
+  /** A fixed paint color, or null to pick the color under the stroke. */
+  color(): RGB | null;
   /** Called when a stroke has finished and its undo record is ready. */
   strokeEnded(record: ReturnType<BrushEngine['end']>): void;
   /** Called whenever paint changed and should be pushed to the screen. */
   flush(): void;
 }
 
-/** Turns pointer events on the view into brush strokes. */
+/** Turns the pointer events it is given into brush strokes. */
 export class PaintController {
   private readonly host: PaintControllerHost;
   private pointerId: number | null = null;
   private path: StrokePath | null = null;
   private start: InputPoint | null = null;
+  private startedAt = 0;
   private frame = 0;
 
   constructor(host: PaintControllerHost) {
     this.host = host;
-    const canvas = host.view.canvas;
-    canvas.addEventListener('pointerdown', (e) => this.down(e));
-    canvas.addEventListener('pointermove', (e) => this.move(e));
-    canvas.addEventListener('pointerup', (e) => this.up(e));
-    canvas.addEventListener('pointercancel', (e) => this.cancelFor(e));
-    canvas.addEventListener('lostpointercapture', (e) => this.up(e));
   }
 
   get painting(): boolean {
     return this.pointerId !== null;
   }
 
-  /** Aborts the current stroke (e.g. when a second finger starts a zoom gesture). */
-  cancel(): void {
-    if (this.pointerId === null) return;
-    const engine = this.host.engine();
-    const canvas = this.host.view.canvas;
-    if (canvas.hasPointerCapture(this.pointerId)) canvas.releasePointerCapture(this.pointerId);
-    this.pointerId = null;
-    this.path = null;
-    engine?.cancel();
-    this.host.flush();
+  /** Milliseconds since the current stroke started. */
+  get age(): number {
+    return this.painting ? performance.now() - this.startedAt : 0;
   }
 
-  private down(e: PointerEvent): void {
+  begin(e: PointerEvent): boolean {
     const engine = this.host.engine();
-    if (!engine || this.pointerId !== null) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    e.preventDefault();
+    if (!engine || this.pointerId !== null) return false;
     this.pointerId = e.pointerId;
-    this.host.view.canvas.setPointerCapture(e.pointerId);
+    this.startedAt = performance.now();
     const params = this.host.params();
     const width = engine.widthFor(params);
     this.path = new StrokePath(Math.max(1, width * params.spacing), params.smoothing);
-    engine.begin(params);
+    engine.begin(params, this.host.color());
     this.start = this.toInput(e);
     this.feed([this.start]);
+    return true;
   }
 
-  private move(e: PointerEvent): void {
+  move(e: PointerEvent): void {
     if (e.pointerId !== this.pointerId) return;
-    e.preventDefault();
     const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const points = (events.length > 0 ? events : [e]).map((ev) => this.toInput(ev));
     this.feed(points);
   }
 
-  private up(e: PointerEvent): void {
-    if (e.pointerId !== this.pointerId) return;
+  /** Finishes the stroke. */
+  end(): void {
+    if (this.pointerId === null) return;
     const engine = this.host.engine();
     if (engine && this.path) {
       if (!this.host.straight()) engine.add(this.path.finish());
@@ -84,8 +74,13 @@ export class PaintController {
     this.scheduleFlush();
   }
 
-  private cancelFor(e: PointerEvent): void {
-    if (e.pointerId === this.pointerId) this.cancel();
+  /** Aborts the current stroke (e.g. when a second finger starts a zoom gesture). */
+  cancel(): void {
+    if (this.pointerId === null) return;
+    this.pointerId = null;
+    this.path = null;
+    this.host.engine()?.cancel();
+    this.host.flush();
   }
 
   private feed(points: InputPoint[]): void {

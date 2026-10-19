@@ -40,11 +40,12 @@ test('saves an image without any metadata', async ({ page }) => {
     page.waitForEvent('download'),
     page.getByRole('button', { name: '保存' }).click(),
   ]);
-  expect(download.suggestedFilename()).toMatch(/^lamosaic-\d{8}-\d{6}\.png$/);
+  // A JPEG photo is saved as JPEG.
+  expect(download.suggestedFilename()).toMatch(/^lamosaic-\d{8}-\d{6}\.jpg$/);
   const bytes = await readFile(await download.path());
-  expect(bytes.subarray(1, 4).toString('latin1')).toBe('PNG');
+  expect(bytes[0]).toBe(0xff);
+  expect(bytes[1]).toBe(0xd8);
   const text = bytes.toString('latin1');
   expect(text).not.toContain('Exif');
-  expect(text).not.toContain('eXIf');
   expect(text).not.toContain('TestCamera');
 });

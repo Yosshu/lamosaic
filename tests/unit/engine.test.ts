@@ -18,7 +18,7 @@ function makeDoc(
 function stroke(engine: BrushEngine, points: Array<[number, number]>, seed = 1) {
   const params = { ...DEFAULT_PARAMS, size: 0.2 };
   const path = new StrokePath(engine.widthFor(params) * params.spacing, 0);
-  engine.begin(params, seed);
+  engine.begin(params, null, seed);
   for (const [x, y] of points) engine.add(path.add({ x, y, pressure: 0.5 }));
   engine.add(path.finish());
   return engine.end();

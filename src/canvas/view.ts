@@ -20,7 +20,7 @@ export class View {
   /** True while the view shows the whole image; cleared when the user zooms or pans. */
   fitted = true;
   private frame = 0;
-  private readonly overlays: Array<(ctx: CanvasRenderingContext2D) => void> = [];
+  private readonly overlays: Array<(ctx: CanvasRenderingContext2D, view: View) => void> = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -36,7 +36,7 @@ export class View {
   }
 
   /** Adds a drawing callback that runs in image coordinates after the document is drawn. */
-  addOverlay(draw: (ctx: CanvasRenderingContext2D) => void): void {
+  addOverlay(draw: (ctx: CanvasRenderingContext2D, view: View) => void): void {
     this.overlays.push(draw);
   }
 
@@ -55,12 +55,46 @@ export class View {
       this.requestRender();
       return;
     }
-    const margin = 16;
-    const availW = Math.max(1, this.cssWidth - margin * 2);
-    const availH = Math.max(1, this.cssHeight - margin * 2);
-    this.scale = Math.min(availW / this.doc.width, availH / this.doc.height);
+    this.scale = this.fitScale();
     this.offsetX = (this.cssWidth - this.doc.width * this.scale) / 2;
     this.offsetY = (this.cssHeight - this.doc.height * this.scale) / 2;
+    this.requestRender();
+  }
+
+  /** The scale at which the whole image fits. */
+  fitScale(): number {
+    if (!this.doc) return 1;
+    const margin = 16;
+    return Math.min(
+      Math.max(1, this.cssWidth - margin * 2) / this.doc.width,
+      Math.max(1, this.cssHeight - margin * 2) / this.doc.height,
+    );
+  }
+
+  /** Zooms by `factor` keeping the given screen point (CSS px) fixed. */
+  zoomAt(p: Point, factor: number): void {
+    if (!this.doc) return;
+    const fit = this.fitScale();
+    const scale = Math.min(Math.max(fit * 16, 8), Math.max(fit * 0.5, this.scale * factor));
+    const image = this.toImage(p);
+    this.setTransform(scale, p.x - image.x * scale, p.y - image.y * scale);
+  }
+
+  panBy(dx: number, dy: number): void {
+    this.setTransform(this.scale, this.offsetX + dx, this.offsetY + dy);
+  }
+
+  /** Sets scale and offset directly, keeping the image's center within reach. */
+  setTransform(scale: number, offsetX: number, offsetY: number): void {
+    if (!this.doc) return;
+    const w = this.doc.width * scale;
+    const h = this.doc.height * scale;
+    const cx = this.cssWidth / 2;
+    const cy = this.cssHeight / 2;
+    this.scale = scale;
+    this.offsetX = Math.min(cx, Math.max(cx - w, offsetX));
+    this.offsetY = Math.min(cy, Math.max(cy - h, offsetY));
+    this.fitted = false;
     this.requestRender();
   }
 
@@ -104,9 +138,7 @@ export class View {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = this.scale < 1 ? 'high' : 'low';
     ctx.drawImage(this.doc.original, 0, 0);
-    if (!this.showOriginal) {
-      ctx.drawImage(this.doc.paintCanvas, 0, 0);
-      for (const draw of this.overlays) draw(ctx);
-    }
+    if (!this.showOriginal) ctx.drawImage(this.doc.paintCanvas, 0, 0);
+    for (const draw of this.overlays) draw(ctx, this);
   }
 }

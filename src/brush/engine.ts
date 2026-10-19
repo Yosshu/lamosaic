@@ -92,6 +92,7 @@ export class BrushEngine {
   private grainAxisY = 0;
   private dirty: Rect | null = null;
   private strokeCount = 0;
+  private fixedColor: RGB | null = null;
 
   constructor(doc: PixelDocument, seed = 1) {
     this.doc = doc;
@@ -110,8 +111,13 @@ export class BrushEngine {
     return Math.max(2, params.size * this.shortSide);
   }
 
-  begin(params: BrushParams, seed = ++this.strokeCount): void {
+  /**
+   * Starts a stroke. With `color` the stroke uses that color (from the eyedropper) instead of
+   * picking one from the photo under the starting point.
+   */
+  begin(params: BrushParams, color: RGB | null = null, seed = ++this.strokeCount): void {
     this.params = { ...params };
+    this.fixedColor = color;
     this.rng = createRng(seed * 7919 + 17);
     this.backup = new Map();
     this.coverage = new Map();
@@ -259,6 +265,7 @@ export class BrushEngine {
   }
 
   private startColor(sample: StrokeSample, params: BrushParams): RGB {
+    if (this.fixedColor) return jitterColor(this.fixedColor, params.colorJitter * 0.5, this.rng);
     const radius = Math.max(1, params.sampleRadius * this.halfWidth * 2);
     const picked = this.sampleColor(sample.x, sample.y, radius, params);
     return jitterColor(styleColor(picked, params), params.colorJitter, this.rng);
