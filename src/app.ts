@@ -1,11 +1,21 @@
+import { BrushEngine } from './brush/engine';
+import { DEFAULT_PARAMS, type BrushParams } from './brush/params';
 import { PaintDocument } from './canvas/document';
+import { History } from './canvas/history';
+import { union, type Rect } from './canvas/rect';
 import { View } from './canvas/view';
+import { PaintController } from './input/paintController';
 import { firstImageFile, loadImageFile, UnsupportedImageError } from './io/load';
 import { encodeCanvas, exportFileName, saveBlob, type ExportFormat } from './io/save';
 
 export class App {
   readonly view: View;
   doc: PaintDocument | null = null;
+  engine: BrushEngine | null = null;
+  history: History | null = null;
+  params: BrushParams = { ...DEFAULT_PARAMS };
+  straight = false;
+  readonly painter: PaintController;
   private readonly root: HTMLElement;
   private readonly fileInput: HTMLInputElement;
   private readonly status: HTMLElement;
@@ -17,6 +27,8 @@ export class App {
         <header class="topbar">
           <span class="brand">lamosaic</span>
           <div class="topbar-actions">
+            <button type="button" class="btn" data-action="undo" aria-label="取り消し" disabled>↶</button>
+            <button type="button" class="btn" data-action="redo" aria-label="やり直し" disabled>↷</button>
             <button type="button" class="btn" data-action="open">画像を開く</button>
             <button type="button" class="btn btn-primary" data-action="save" disabled>保存</button>
           </div>
@@ -42,6 +54,19 @@ export class App {
       .forEach((b) => b.addEventListener('click', () => this.fileInput.click()));
     this.q<HTMLButtonElement>('[data-action=save]').addEventListener('click', () => {
       void this.save('png');
+    });
+    this.q<HTMLButtonElement>('[data-action=undo]').addEventListener('click', () => this.undo());
+    this.q<HTMLButtonElement>('[data-action=redo]').addEventListener('click', () => this.redo());
+    this.painter = new PaintController({
+      view: this.view,
+      engine: () => this.engine,
+      params: () => this.params,
+      straight: () => this.straight,
+      strokeEnded: (record) => {
+        this.history?.push(record);
+        this.updateHistoryButtons();
+      },
+      flush: () => this.flushEngine(),
     });
     this.fileInput.addEventListener('change', () => {
       const file = this.fileInput.files?.[0];
@@ -71,7 +96,10 @@ export class App {
     try {
       const canvas = await loadImageFile(file);
       this.doc = new PaintDocument(canvas);
+      this.engine = new BrushEngine(this.doc);
+      this.history = new History(this.engine.grid, this.doc.paint);
       this.view.setDocument(this.doc);
+      this.updateHistoryButtons();
       this.q<HTMLElement>('.app').dataset.empty = 'false';
       this.q<HTMLButtonElement>('[data-action=save]').disabled = false;
       this.setStatus('');
@@ -93,6 +121,36 @@ export class App {
       console.error(error);
       this.setStatus('保存できませんでした。');
     }
+  }
+
+  undo(): void {
+    if (this.painter.painting) return;
+    this.applyTiles(this.history?.undo() ?? null);
+  }
+
+  redo(): void {
+    if (this.painter.painting) return;
+    this.applyTiles(this.history?.redo() ?? null);
+  }
+
+  private applyTiles(tiles: number[] | null): void {
+    if (!tiles || !this.doc || !this.engine) return;
+    let region: Rect | null = null;
+    for (const index of tiles) region = union(region, this.engine.grid.tileRect(index));
+    if (region) this.doc.flush(region);
+    this.view.requestRender();
+    this.updateHistoryButtons();
+  }
+
+  private flushEngine(): void {
+    const dirty = this.engine?.takeDirty();
+    if (dirty && this.doc) this.doc.flush(dirty);
+    this.view.requestRender();
+  }
+
+  private updateHistoryButtons(): void {
+    this.q<HTMLButtonElement>('[data-action=undo]').disabled = !this.history?.canUndo;
+    this.q<HTMLButtonElement>('[data-action=redo]').disabled = !this.history?.canRedo;
   }
 
   setStatus(message: string): void {
