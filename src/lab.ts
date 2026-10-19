@@ -21,6 +21,7 @@ const RANGES: Array<[key: NumericKey, min: number, max: number, step: number]> =
   ['grain', 0, 2, 0.01],
   ['grainScale', 0.0002, 0.006, 0.0001],
   ['grainContrast', 1, 12, 0.1],
+  ['grainStretch', 1, 10, 0.1],
   ['bristle', 0, 1, 0.01],
   ['bristleCount', 2, 80, 1],
   ['mottle', 0, 1, 0.01],

@@ -103,3 +103,19 @@ describe('BrushEngine', () => {
     expect(alphaSum(doc)).toBe(0);
   });
 });
+
+describe('BrushEngine dirty tracking', () => {
+  it('keeps unflushed changes when the next stroke starts', () => {
+    const doc = makeDoc();
+    const engine = new BrushEngine(doc);
+    stroke(engine, [
+      [40, 60],
+      [160, 60],
+    ]);
+    // Start another stroke before the previous end was flushed to the screen.
+    engine.begin({ ...DEFAULT_PARAMS });
+    const dirty = engine.takeDirty();
+    expect(dirty).not.toBeNull();
+    expect(dirty!.x + dirty!.width).toBeGreaterThan(160);
+  });
+});

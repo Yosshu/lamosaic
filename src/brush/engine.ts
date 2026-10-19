@@ -52,7 +52,9 @@ interface Piece {
   /** Arc length at a and b. */
   sa: number;
   sb: number;
+  /** Paint color at a and at b (they differ when the brush picks up color). */
   color: RGB;
+  colorB: RGB;
 }
 
 /**
@@ -85,6 +87,9 @@ export class BrushEngine {
   private wobbleR: Float32Array = new Float32Array(WOBBLE_LENGTH);
   private grainOffsetX = 0;
   private grainOffsetY = 0;
+  /** Direction the grain is stretched along: the stroke's initial direction. */
+  private grainAxisX = 1;
+  private grainAxisY = 0;
   private dirty: Rect | null = null;
   private strokeCount = 0;
 
@@ -106,12 +111,11 @@ export class BrushEngine {
   }
 
   begin(params: BrushParams, seed = ++this.strokeCount): void {
-    this.params = params;
+    this.params = { ...params };
     this.rng = createRng(seed * 7919 + 17);
     this.backup = new Map();
     this.coverage = new Map();
     this.samples = [];
-    this.dirty = null;
     this.halfWidth = this.widthFor(params) / 2;
     this.grainOffsetX = this.rng() * TEXTURE_SIZE;
     this.grainOffsetY = this.rng() * TEXTURE_SIZE;
@@ -135,6 +139,7 @@ export class BrushEngine {
         this.color = this.startColor(sample, params);
         continue;
       }
+      const from = this.color;
       if (params.pickup > 0) {
         const under = this.sampleColor(sample.x, sample.y, this.halfWidth * 0.5, params);
         const step = Math.min(
@@ -143,8 +148,12 @@ export class BrushEngine {
         );
         this.color = mixRgb(this.color, styleColor(under, params), step);
       }
-      if (this.samples.length === 2) this.rasterize(this.piece(Part.StartCap, prev, prev));
-      this.rasterize(this.piece(Part.Body, prev, sample));
+      if (this.samples.length === 2) {
+        this.grainAxisX = Math.cos(prev.angle);
+        this.grainAxisY = Math.sin(prev.angle);
+        this.rasterize(this.piece(Part.StartCap, prev, prev, from));
+      }
+      this.rasterize(this.piece(Part.Body, prev, sample, from));
     }
   }
 
@@ -259,7 +268,7 @@ export class BrushEngine {
     return 0.55 + 0.9 * Math.min(1, Math.max(0, p));
   }
 
-  private piece(part: Part, a: StrokeSample, b: StrokeSample): Piece {
+  private piece(part: Part, a: StrokeSample, b: StrokeSample, colorA = this.color): Piece {
     return {
       part,
       ax: a.x,
@@ -274,7 +283,8 @@ export class BrushEngine {
       hb: this.halfWidth * this.pressureScale(b.pressure),
       sa: a.distance,
       sb: b.distance,
-      color: this.color,
+      color: colorA,
+      colorB: this.color,
     };
   }
 
@@ -363,10 +373,16 @@ export class BrushEngine {
     const grainStep = 1 / Math.max(0.25, params.grainScale * this.shortSide);
     const cloudStep = 8 / Math.max(1, params.mottleScale * fullWidth);
     const bristle = params.bristle;
-    const mottle = params.mottle * 0.5;
+    const mottle = params.mottle;
+    const stretch = 1 / Math.max(1, params.grainStretch);
+    const gax = this.grainAxisX * grainStep;
+    const gay = this.grainAxisY * grainStep;
     const underlay = params.underlay;
     const opacity = params.opacity;
     const [cr, cg, cb] = p.color;
+    const dr = p.colorB[0] - cr;
+    const dg = p.colorB[1] - cg;
+    const db = p.colorB[2] - cb;
     const wobbleScale = WOBBLE_LENGTH / Math.max(1, fullWidth * 6);
     const goX = this.grainOffsetX;
     const goY = this.grainOffsetY;
@@ -457,17 +473,19 @@ export class BrushEngine {
             c *= 0.35 + 0.65 * k * k * (3 - 2 * k);
           }
           if (bristle > 0) {
+            // Streaks show most where the paint is already thin: the ends and the edges.
             const bi = ((v / hw) * 0.5 + 0.5) * (BRISTLE_LENGTH - 1);
-            c *= 1 - bristle * (1 - (bristles[bi | 0] as number));
+            c *= 1 - bristle * (1 - (bristles[bi | 0] as number)) * (0.35 + 0.65 * (1 - c));
           }
           const ci = ly * TILE_SIZE + (x - tile.x);
           const value = (c * 255 + 0.5) | 0;
           if (value <= (cov[ci] as number)) continue;
           cov[ci] = value;
 
-          // Paper tooth: bilinear sample of the tiling texture.
-          const gu = x * grainStep + goX;
-          const gv = y * grainStep + goY;
+          // Paper tooth: bilinear sample of the tiling texture, optionally stretched along the
+          // stroke so the grain turns into streaks.
+          const gu = (x * gax + y * gay) * stretch + goX;
+          const gv = y * gax - x * gay + goY;
           const fu = Math.floor(gu);
           const fv = Math.floor(gv);
           const du = gu - fu;
@@ -489,14 +507,18 @@ export class BrushEngine {
           if (alpha <= 0) continue;
           alpha *= opacity;
 
-          let r = cr;
-          let g = cg;
-          let b = cb;
+          let r = cr + dr * t;
+          let g = cg + dg * t;
+          let b = cb + db * t;
           if (mottle > 0) {
-            const m = 1 + (cloud.sample(x * cloudStep, y * cloudStep) - 0.5) * mottle;
-            r *= m;
-            g *= m;
-            b *= m;
+            // Cloudy blotches: lighter, denser patches next to darker, thinner ones.
+            const m = cloud.sample(x * cloudStep, y * cloudStep) - 0.5;
+            const shade = 1 + m * mottle * 0.7;
+            r *= shade;
+            g *= shade;
+            b *= shade;
+            alpha *= 1 + m * mottle * 0.6;
+            if (alpha > 1) alpha = 1;
           }
           const ti = (ly * tileW + (x - tile.x)) * 4;
           const ba = (base[ti + 3] as number) / 255;

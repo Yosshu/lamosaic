@@ -1,5 +1,6 @@
 import { BrushEngine } from './brush/engine';
-import { DEFAULT_PARAMS, type BrushParams } from './brush/params';
+import type { BrushParams } from './brush/params';
+import { presetById, type PresetId } from './brush/presets';
 import { PaintDocument } from './canvas/document';
 import { History } from './canvas/history';
 import { union, type Rect } from './canvas/rect';
@@ -13,7 +14,8 @@ export class App {
   doc: PaintDocument | null = null;
   engine: BrushEngine | null = null;
   history: History | null = null;
-  params: BrushParams = { ...DEFAULT_PARAMS };
+  presetId: PresetId = 'crayon';
+  params: BrushParams = { ...presetById('crayon').params };
   straight = false;
   readonly painter: PaintController;
   private readonly root: HTMLElement;
@@ -113,6 +115,7 @@ export class App {
 
   async save(format: ExportFormat): Promise<void> {
     if (!this.doc) return;
+    this.flushEngine();
     try {
       const blob = await encodeCanvas(this.doc.composite(), format);
       const result = await saveBlob(blob, exportFileName(format));
@@ -121,6 +124,12 @@ export class App {
       console.error(error);
       this.setStatus('保存できませんでした。');
     }
+  }
+
+  /** Switches the brush to a preset. */
+  setPreset(id: PresetId): void {
+    this.presetId = id;
+    this.params = { ...presetById(id).params };
   }
 
   undo(): void {

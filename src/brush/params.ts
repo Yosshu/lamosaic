@@ -24,6 +24,8 @@ export interface BrushParams {
   grainScale: number;
   /** Crispness of the grain holes (1 = soft, 8 = crisp). */
   grainContrast: number;
+  /** Stretches the grain along the stroke direction (1 = round speckles, 6 = long streaks). */
+  grainStretch: number;
   /** Streaks along the stroke, like dry bristles (0..1). */
   bristle: number;
   /** Number of streaks across the ribbon. */
@@ -66,6 +68,7 @@ export const DEFAULT_PARAMS: BrushParams = {
   grain: 1.0,
   grainScale: 0.0009,
   grainContrast: 6,
+  grainStretch: 1,
   bristle: 0.04,
   bristleCount: 18,
   mottle: 0,
