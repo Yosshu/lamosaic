@@ -1,0 +1,32 @@
+{
+  "name": "lamosaic",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Paint crayon-style strokes over faces to hide them stylishly. Runs entirely in the browser.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "jsdom": "^30.1.3",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}
