@@ -56,10 +56,10 @@ describe('coverRegion', () => {
 });
 
 describe('planStrokes', () => {
-  it('lays two layers of strokes that span past the region', () => {
+  it('lays three layers of strokes that span past the region', () => {
     const region = { cx: 500, cy: 400, width: 300, height: 120, angle: 0 };
     const plan = planStrokes(region, 'eyes', createRng(1));
-    expect(plan.strokes).toHaveLength(5);
+    expect(plan.strokes).toHaveLength(9);
     for (const stroke of plan.strokes) {
       const xs = stroke.map((p) => p.x);
       expect(Math.min(...xs)).toBeLessThan(350);

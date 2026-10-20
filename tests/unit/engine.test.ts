@@ -119,3 +119,58 @@ describe('BrushEngine dirty tracking', () => {
     expect(dirty!.x + dirty!.width).toBeGreaterThan(160);
   });
 });
+
+describe('BrushEngine local color', () => {
+  it('takes the color under each part of the stroke', () => {
+    // Left half red, right half blue.
+    const doc = makeDoc(240, 120);
+    for (let y = 0; y < 120; y++) {
+      for (let x = 0; x < 240; x++) {
+        doc.originalPixels.set(
+          x < 120 ? [220, 40, 40, 255] : [40, 60, 220, 255],
+          (y * 240 + x) * 4,
+        );
+      }
+    }
+    const engine = new BrushEngine(doc);
+    const params = {
+      ...DEFAULT_PARAMS,
+      size: 0.25,
+      colorSource: 'local' as const,
+      mute: 0,
+      lighten: 0,
+    };
+    const path = new StrokePath(engine.widthFor(params) * params.spacing, 0);
+    engine.begin(params, null, 1);
+    engine.add(path.add({ x: 20, y: 60, pressure: 0.5 }));
+    engine.add(path.add({ x: 220, y: 60, pressure: 0.5 }));
+    engine.add(path.finish());
+    engine.end();
+    const px = (x: number) =>
+      Array.from(doc.paint.slice((60 * 240 + x) * 4, (60 * 240 + x) * 4 + 3));
+    expect(px(40)[0]).toBeGreaterThan(px(40)[2]!);
+    expect(px(200)[2]).toBeGreaterThan(px(200)[0]!);
+  });
+
+  it('keeps one color along the stroke with the start color', () => {
+    const doc = makeDoc(240, 120);
+    for (let y = 0; y < 120; y++) {
+      for (let x = 0; x < 240; x++) {
+        doc.originalPixels.set(
+          x < 120 ? [220, 40, 40, 255] : [40, 60, 220, 255],
+          (y * 240 + x) * 4,
+        );
+      }
+    }
+    const engine = new BrushEngine(doc);
+    const params = { ...DEFAULT_PARAMS, size: 0.25, colorSource: 'start' as const };
+    const path = new StrokePath(engine.widthFor(params) * params.spacing, 0);
+    engine.begin(params, null, 1);
+    engine.add(path.add({ x: 20, y: 60, pressure: 0.5 }));
+    engine.add(path.add({ x: 220, y: 60, pressure: 0.5 }));
+    engine.add(path.finish());
+    engine.end();
+    const k = (60 * 240 + 200) * 4;
+    expect(doc.paint[k]).toBeGreaterThan(doc.paint[k + 2]!);
+  });
+});

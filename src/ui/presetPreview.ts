@@ -11,8 +11,11 @@ const COLORS: RGB[] = [
   [196, 140, 136],
 ];
 
-/** A tiny dark "photo" (like hair) so light strokes show up clearly. */
-function samplePhoto(): Uint8ClampedArray {
+/**
+ * A tiny dark "photo" (like hair) so light strokes show up clearly. With `features`, it gets
+ * light, skin-like spots for the local-color previews to blur or pixelate.
+ */
+function samplePhoto(features: boolean): Uint8ClampedArray {
   const px = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
   for (let y = 0; y < HEIGHT; y++) {
     for (let x = 0; x < WIDTH; x++) {
@@ -22,14 +25,26 @@ function samplePhoto(): Uint8ClampedArray {
       px[k + 1] = 80 + (50 - 80) * t;
       px[k + 2] = 74 + (48 - 74) * t;
       px[k + 3] = 255;
+      if (features) {
+        const spot = Math.sin(x * 0.11) * Math.cos(y * 0.16 + x * 0.03);
+        if (spot > 0.15) {
+          px[k] = 236;
+          px[k + 1] = 196;
+          px[k + 2] = 184;
+        }
+      }
     }
   }
   return px;
 }
 
-/** Renders two sample strokes with the preset and returns the result as an image URL. */
-export function renderPresetPreview(params: BrushParams): string {
-  const originalPixels = samplePhoto();
+/**
+ * Renders two sample strokes with the preset and returns the result as an image URL. With
+ * `localColor` the strokes take their colors from the sample photo, which shows off blur and
+ * mosaic; otherwise they use fixed skin tones so the texture is visible.
+ */
+export function renderPresetPreview(params: BrushParams, localColor = false): string {
+  const originalPixels = samplePhoto(localColor);
   const doc: PixelDocument = {
     width: WIDTH,
     height: HEIGHT,
@@ -37,7 +52,12 @@ export function renderPresetPreview(params: BrushParams): string {
     paint: new Uint8ClampedArray(WIDTH * HEIGHT * 4),
   };
   const engine = new BrushEngine(doc, 3);
-  const p = { ...params, size: Math.min(0.6, params.size * 4.2), smoothing: 0 };
+  const p: BrushParams = {
+    ...params,
+    size: Math.min(0.6, params.size * 4.2),
+    smoothing: 0,
+    colorSource: 'local',
+  };
   const strokes: Array<Array<[number, number]>> = [
     [
       [18, 46],
@@ -52,7 +72,7 @@ export function renderPresetPreview(params: BrushParams): string {
   ];
   strokes.forEach((points, i) => {
     const path = new StrokePath(engine.widthFor(p) * p.spacing, 0);
-    engine.begin(p, COLORS[i % COLORS.length] ?? null, i + 1);
+    engine.begin(p, localColor ? null : (COLORS[i % COLORS.length] ?? null), i + 1);
     for (const [x, y] of points) engine.add(path.add({ x, y, pressure: 0.5 }));
     engine.add(path.finish());
     engine.end();

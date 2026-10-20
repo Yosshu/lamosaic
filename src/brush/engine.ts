@@ -11,6 +11,7 @@ import {
   type Texture,
 } from './noise';
 import type { BrushParams } from './params';
+import { ColorPyramid } from './pyramid';
 
 /** The parts of the document the engine needs: original pixels to pick colors from and the paint layer. */
 export interface PixelDocument {
@@ -93,6 +94,9 @@ export class BrushEngine {
   private dirty: Rect | null = null;
   private strokeCount = 0;
   private fixedColor: RGB | null = null;
+  private pyramid: ColorPyramid | null = null;
+  /** Per-stroke lightness variation for local-color strokes. */
+  private localJitter = 1;
 
   constructor(doc: PixelDocument, seed = 1) {
     this.doc = doc;
@@ -118,6 +122,9 @@ export class BrushEngine {
   begin(params: BrushParams, color: RGB | null = null, seed = ++this.strokeCount): void {
     this.params = { ...params };
     this.fixedColor = color;
+    if (params.colorSource === 'local' && !color && !this.pyramid) {
+      this.pyramid = new ColorPyramid(this.doc.originalPixels, this.doc.width, this.doc.height);
+    }
     this.rng = createRng(seed * 7919 + 17);
     this.backup = new Map();
     this.coverage = new Map();
@@ -125,6 +132,7 @@ export class BrushEngine {
     this.halfWidth = this.widthFor(params) / 2;
     this.grainOffsetX = this.rng() * TEXTURE_SIZE;
     this.grainOffsetY = this.rng() * TEXTURE_SIZE;
+    this.localJitter = 1 + (this.rng() - 0.5) * params.colorJitter * 0.16;
     this.bristles = noise1D(
       this.rng,
       BRISTLE_LENGTH,
@@ -386,6 +394,15 @@ export class BrushEngine {
     const gay = this.grainAxisY * grainStep;
     const underlay = params.underlay;
     const opacity = params.opacity;
+    // Local color: each pixel takes the blurred (or mosaic-averaged) photo color under it.
+    const pyramid = params.colorSource === 'local' && !this.fixedColor ? this.pyramid : null;
+    const blurRadius = Math.max(1, params.localBlur * fullWidth);
+    const mosaicBlock = params.mosaic > 0 ? Math.max(2, params.mosaic * fullWidth) : 0;
+    const local = new Float32Array(3);
+    const keep = 1 - Math.min(1, Math.max(0, params.mute));
+    const lift = Math.max(-0.5, Math.min(0.6, params.lighten * 1.3));
+    const warm = params.warmth * 600;
+    const jitter = this.localJitter;
     const [cr, cg, cb] = p.color;
     const dr = p.colorB[0] - cr;
     const dg = p.colorB[1] - cg;
@@ -514,9 +531,36 @@ export class BrushEngine {
           if (alpha <= 0) continue;
           alpha *= opacity;
 
-          let r = cr + dr * t;
-          let g = cg + dg * t;
-          let b = cb + db * t;
+          let r: number;
+          let g: number;
+          let b: number;
+          if (pyramid) {
+            if (mosaicBlock > 0) pyramid.block(x, y, mosaicBlock, local);
+            else pyramid.smooth(x, y, blurRadius, local);
+            r = local[0] as number;
+            g = local[1] as number;
+            b = local[2] as number;
+            // Cheap version of the dusty correction: toward gray, then toward white.
+            const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+            r = (lum + (r - lum) * keep) * jitter;
+            g = (lum + (g - lum) * keep) * jitter;
+            b = (lum + (b - lum) * keep) * jitter;
+            if (lift > 0) {
+              r += (255 - r) * lift;
+              g += (255 - g) * lift;
+              b += (255 - b) * lift;
+            } else {
+              r *= 1 + lift;
+              g *= 1 + lift;
+              b *= 1 + lift;
+            }
+            r += warm;
+            b -= warm * 0.4;
+          } else {
+            r = cr + dr * t;
+            g = cg + dg * t;
+            b = cb + db * t;
+          }
           if (mottle > 0) {
             // Cloudy blotches: lighter, denser patches next to darker, thinner ones.
             const m = cloud.sample(x * cloudStep, y * cloudStep) - 0.5;

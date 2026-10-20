@@ -97,7 +97,7 @@ test.describe('desktop controls', () => {
 
   test('eyedropper picks a color that the next stroke uses', async ({ page }) => {
     await openFixture(page);
-    await page.getByRole('button', { name: /スポイト/ }).click();
+    await page.getByRole('radio', { name: /スポイト/ }).click();
     const box = await page.locator('canvas.view').boundingBox();
     // The top of the fixture is red.
     await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height * 0.25);
@@ -105,7 +105,13 @@ test.describe('desktop controls', () => {
     expect(picked).not.toBeNull();
     expect(picked![0]).toBeGreaterThan(150);
     expect(picked![2]).toBeLessThan(100);
-    await expect(page.getByRole('button', { name: '自動の色に戻す' })).toBeVisible();
+    await expect(page.getByRole('radio', { name: /選んだ色/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    // Going back to the photo's colors clears the picked color.
+    await page.getByRole('radio', { name: 'その場の色' }).click();
+    expect(await app(page, (a) => a.pickedColor)).toBeNull();
   });
 
   test('the see-through check reports thin paint', async ({ page }) => {

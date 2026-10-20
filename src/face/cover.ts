@@ -75,7 +75,7 @@ export function coverRegion(face: FaceInfo, area: CoverArea): CoverRegion {
         cx: box.x + box.width / 2,
         cy: box.y + box.height * 0.38,
         width: box.width * 1.15,
-        height: box.height * 0.42,
+        height: box.height * 0.5,
         angle: 0,
       };
     }
@@ -96,7 +96,7 @@ export function coverRegion(face: FaceInfo, area: CoverArea): CoverRegion {
     const pts = [...lm.slice(17, 27), ...lm.slice(36, 48)];
     const b = alignedBounds(pts, eyesCenter, angle);
     const w = (b.maxX - b.minX) * 1.35;
-    const h = (b.maxY - b.minY) * 2.1;
+    const h = (b.maxY - b.minY) * 2.8;
     const c = toImage(eyesCenter, angle, (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2 + h * 0.08);
     return { cx: c.x, cy: c.y, width: w, height: h, angle };
   }
@@ -112,7 +112,7 @@ export function coverRegion(face: FaceInfo, area: CoverArea): CoverRegion {
 }
 
 /**
- * Lays out rough, overlapping strokes across a region: parallel swipes in two layers, slightly
+ * Lays out rough, overlapping strokes across a region: parallel swipes in three layers, slightly
  * jittered, extending past the region's sides so the edges look hand-made.
  */
 export function planStrokes(region: CoverRegion, area: CoverArea, rng: () => number): StrokePlan {
@@ -122,13 +122,12 @@ export function planStrokes(region: CoverRegion, area: CoverArea, rng: () => num
   const origin = { x: region.cx, y: region.cy };
   const half = region.width / 2 / Math.cos(STROKE_TILT);
   const strokes: Point[][] = [];
-  for (let layer = 0; layer < 2; layer++) {
-    // The second layer sits between the first layer's rows, so it has one row fewer.
-    for (let i = 0; i < rows - layer; i++) {
+  // Three layers, each shifted by a third of the row spacing, so no gap survives all of them.
+  const step = width * 0.78;
+  for (let layer = 0; layer < 3; layer++) {
+    for (let i = 0; i < rows; i++) {
       const across =
-        (i - (rows - 1) / 2) * width * 0.78 +
-        (layer === 1 ? width * 0.39 : 0) +
-        (rng() - 0.5) * width * 0.25;
+        (i - (rows - 1) / 2) * step + ((layer - 1) * step) / 3 + (rng() - 0.5) * width * 0.2;
       const start = -half - width * (0.05 + rng() * 0.5);
       const end = half + width * (0.05 + rng() * 0.5);
       const bend = (rng() - 0.5) * width * 0.2;

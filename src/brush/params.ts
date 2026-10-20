@@ -37,6 +37,16 @@ export interface BrushParams {
   /** Solid paint underneath the grain so the center never shows through (0..1). */
   underlay: number;
 
+  /**
+   * Where the paint color comes from: `local` uses the (blurred) photo right under the brush,
+   * so each part of the stroke takes the color of what it covers; `start` picks one color where
+   * the stroke begins and drags it along.
+   */
+  colorSource: 'local' | 'start';
+  /** Blur radius of the local color, as a fraction of the brush width. */
+  localBlur: number;
+  /** Mosaic cell size as a fraction of the brush width (0 = smooth, no mosaic). */
+  mosaic: number;
   /** Radius of the area the stroke color is picked from, as a fraction of the brush width. */
   sampleRadius: number;
   /** Pick colors from the original photo or from what is currently visible. */
@@ -74,6 +84,9 @@ export const DEFAULT_PARAMS: BrushParams = {
   mottle: 0,
   mottleScale: 0.6,
   underlay: 0,
+  colorSource: 'local',
+  localBlur: 0.35,
+  mosaic: 0,
   sampleRadius: 0.35,
   sampleFrom: 'original',
   pickup: 0,

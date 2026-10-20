@@ -68,7 +68,9 @@ export class App {
   presetId: PresetId = 'crayon';
   params: BrushParams = { ...presetById('crayon').params };
   straight = false;
-  /** Color chosen with the eyedropper; null picks the color under each stroke. */
+  /** Where stroke colors come from, unless the eyedropper picked one. */
+  colorMode: BrushParams['colorSource'] = 'local';
+  /** Color chosen with the eyedropper; null picks colors from the photo. */
   pickedColor: RGB | null = null;
   private picking = false;
   private detecting = false;
@@ -165,11 +167,14 @@ export class App {
           <div class="presets" role="radiogroup" aria-label="ブラシの種類">${presets}</div>
           <div class="sliders">${sliders}</div>
           <div class="modes">
+            <div class="segmented" role="radiogroup" aria-label="色の拾い方">
+              <button type="button" class="toggle" role="radio" data-color="local" title="今なぞっている所の色で塗る">その場の色</button>
+              <button type="button" class="toggle" role="radio" data-color="start" title="塗り始めた所の色を伸ばす">始点の色</button>
+              <button type="button" class="toggle" role="radio" data-action="picker" title="写真から色を選ぶ (I)">
+                <span class="swatch" aria-hidden="true"></span><span class="picker-label">スポイト</span>
+              </button>
+            </div>
             <button type="button" class="toggle" data-action="straight" aria-pressed="false" title="始点から指先までまっすぐ塗る (L)">直線</button>
-            <button type="button" class="toggle" data-action="picker" aria-pressed="false" title="写真から色を選ぶ (I)">
-              <span class="swatch" aria-hidden="true"></span><span class="picker-label">スポイト</span>
-            </button>
-            <button type="button" class="toggle" data-action="auto-color" hidden>自動の色に戻す</button>
           </div>
           <div class="auto" role="group" aria-label="おまかせ下塗り">
             <span class="auto-label">おまかせ下塗り</span>
@@ -192,7 +197,7 @@ export class App {
           <dl>
             <dt>2本指</dt><dd>ピンチで拡大・縮小、ドラッグで移動、すばやくタップで取り消し</dd>
             <dt>Apple Pencil</dt><dd>ペンで塗り、指は移動だけになります</dd>
-            <dt>パソコン</dt><dd>ホイールで拡大、スペース＋ドラッグで移動、⌘/Ctrl+Z で取り消し、[ ] でサイズ、1〜4 で種類</dd>
+            <dt>パソコン</dt><dd>ホイールで拡大、スペース＋ドラッグで移動、⌘/Ctrl+Z で取り消し、[ ] でサイズ、1〜6 で種類</dd>
           </dl>
           <form method="dialog"><button class="btn btn-primary">閉じる</button></form>
         </dialog>
@@ -261,10 +266,13 @@ export class App {
     this.q('[data-action=picker]').addEventListener('click', () => this.setPicking(!this.picking));
     this.q('[data-action=auto-eyes]').addEventListener('click', () => void this.autoCover('eyes'));
     this.q('[data-action=auto-face]').addEventListener('click', () => void this.autoCover('face'));
-    this.q('[data-action=auto-color]').addEventListener('click', () => {
-      this.pickedColor = null;
-      this.setPicking(false);
-    });
+    this.root
+      .querySelectorAll<HTMLButtonElement>('[data-color]')
+      .forEach((b) =>
+        b.addEventListener('click', () =>
+          this.setColorMode(b.dataset.color as BrushParams['colorSource']),
+        ),
+      );
   }
 
   private bindFileInputs(): void {
@@ -377,7 +385,16 @@ export class App {
     this.presetId = id;
     this.params = { ...presetById(id).params };
     this.params.size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, this.params.size * scale));
+    this.params.colorSource = this.colorMode;
     this.syncTools();
+  }
+
+  /** Paint with the color under the brush (`local`) or the color where the stroke starts. */
+  setColorMode(mode: BrushParams['colorSource']): void {
+    this.colorMode = mode;
+    this.params.colorSource = mode;
+    this.pickedColor = null;
+    this.setPicking(false);
   }
 
   /** Finds faces on the device and paints rough strokes over the chosen area of each. */
@@ -413,7 +430,15 @@ export class App {
     const merged: TileSet = new Map();
     for (const face of faces) {
       const plan = planStrokes(coverRegion(face, area), area, rng);
-      const params = { ...this.params, size: plan.width / shortSide };
+      // Auto strokes must hide the face: dense paint and a wide blur so no feature survives.
+      const params: BrushParams = {
+        ...this.params,
+        size: plan.width / shortSide,
+        opacity: Math.max(this.params.opacity, 0.96),
+        underlay: Math.max(this.params.underlay, 0.65),
+        grain: this.params.grain * 0.6,
+        localBlur: Math.max(this.params.localBlur, 0.8),
+      };
       for (const points of plan.strokes) {
         const path = new StrokePath(Math.max(1, plan.width * params.spacing), 0);
         engine.begin(params, this.pickedColor);
@@ -553,20 +578,25 @@ export class App {
     this.q('[data-action=straight]').setAttribute('aria-pressed', String(this.straight));
     this.q('[data-action=check]').setAttribute('aria-pressed', String(this.checking));
     const picker = this.q<HTMLButtonElement>('[data-action=picker]');
-    picker.setAttribute('aria-pressed', String(this.picking));
+    picker.setAttribute('aria-checked', String(this.picking || this.pickedColor !== null));
+    this.root.querySelectorAll<HTMLButtonElement>('[data-color]').forEach((b) => {
+      const on = !this.picking && !this.pickedColor && b.dataset.color === this.colorMode;
+      b.setAttribute('aria-checked', String(on));
+    });
     const swatch = this.q<HTMLElement>('.swatch');
     swatch.style.background = this.pickedColor
       ? `rgb(${this.pickedColor.map((c) => Math.round(c)).join(' ')})`
       : '';
     swatch.classList.toggle('auto', !this.pickedColor);
     this.q<HTMLElement>('.picker-label').textContent = this.pickedColor ? '選んだ色' : 'スポイト';
-    this.q<HTMLButtonElement>('[data-action=auto-color]').hidden = !this.pickedColor;
     this.q<HTMLElement>('.stage').dataset.picking = String(this.picking);
     this.q<HTMLElement>('.hint').textContent = this.picking
       ? '色を取りたい所をタップしてください'
       : this.pickedColor
         ? '選んだ色で塗ります'
-        : '塗り始めた所の色を自動で拾います';
+        : this.colorMode === 'local'
+          ? 'なぞっている所の色を拾って、形を溶かすように塗ります'
+          : '塗り始めた所の色を伸ばして塗ります';
   }
 
   private renderPreviews(): void {
@@ -576,7 +606,8 @@ export class App {
         const thumb = this.root.querySelector<HTMLElement>(
           `[data-preset=${preset.id}] .preset-thumb`,
         );
-        if (thumb) thumb.style.backgroundImage = `url(${renderPresetPreview(preset.params)})`;
+        if (thumb)
+          thumb.style.backgroundImage = `url(${renderPresetPreview(preset.params, preset.params.mosaic > 0 || preset.id === 'blur')})`;
       }
     });
   }
