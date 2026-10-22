@@ -69,7 +69,7 @@ export class App {
   params: BrushParams = { ...presetById('crayon').params };
   straight = false;
   /** Where stroke colors come from, unless the eyedropper picked one. */
-  colorMode: BrushParams['colorSource'] = 'local';
+  colorMode: 'local' | 'start' = 'local';
   /** Color chosen with the eyedropper; null picks colors from the photo. */
   pickedColor: RGB | null = null;
   private picking = false;
@@ -269,9 +269,7 @@ export class App {
     this.root
       .querySelectorAll<HTMLButtonElement>('[data-color]')
       .forEach((b) =>
-        b.addEventListener('click', () =>
-          this.setColorMode(b.dataset.color as BrushParams['colorSource']),
-        ),
+        b.addEventListener('click', () => this.setColorMode(b.dataset.color as 'local' | 'start')),
       );
   }
 
@@ -385,14 +383,20 @@ export class App {
     this.presetId = id;
     this.params = { ...presetById(id).params };
     this.params.size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, this.params.size * scale));
-    this.params.colorSource = this.colorMode;
+    this.applyColorMode();
     this.syncTools();
   }
 
+  /** Blur and mosaic always use the per-pixel photo color; other brushes follow the mode. */
+  private applyColorMode(): void {
+    const own = presetById(this.presetId).params.colorSource;
+    this.params.colorSource = own === 'pixel' ? 'pixel' : this.colorMode;
+  }
+
   /** Paint with the color under the brush (`local`) or the color where the stroke starts. */
-  setColorMode(mode: BrushParams['colorSource']): void {
+  setColorMode(mode: 'local' | 'start'): void {
     this.colorMode = mode;
-    this.params.colorSource = mode;
+    this.applyColorMode();
     this.pickedColor = null;
     this.setPicking(false);
   }

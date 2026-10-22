@@ -11,16 +11,37 @@ export interface Preset {
 }
 
 /**
- * Crayon: grainy flat slabs, each in one color, with speckled edges.
- * The base for the other presets.
+ * Crayon: opaque slabs in the color of what they cover, with fine light and dark flecks and
+ * edges that break up into sandy grain.
  */
-const crayon: BrushParams = { ...DEFAULT_PARAMS };
+const crayon: BrushParams = {
+  ...DEFAULT_PARAMS,
+  opacity: 0.97,
+  edgeSoftness: 0.55,
+  edgeWobble: 0.05,
+  endFeather: 0.6,
+  grain: 1,
+  grainCore: 0.15,
+  grainScale: 0.0005,
+  grainContrast: 2.5,
+  grainStretch: 1.8,
+  bristle: 0.08,
+  texture: 0.25,
+  mottle: 0.1,
+  mottleScale: 0.3,
+  localBlur: 0.9,
+  pickup: 0.6,
+  lighten: 0.12,
+  mute: -0.2,
+  warmth: 0,
+  colorJitter: 0.5,
+};
 
 /** Soft: fine, low-contrast grain, pale and slightly see-through, with faint streaks. */
 const soft: BrushParams = {
   ...DEFAULT_PARAMS,
   size: 0.1,
-  opacity: 0.8,
+  opacity: 0.92,
   edgeSoftness: 0.5,
   endFeather: 0.5,
   grain: 0.85,
@@ -32,10 +53,12 @@ const soft: BrushParams = {
   mottle: 0.15,
   mottleScale: 0.4,
   sampleFrom: 'composite',
-  pickup: 0.15,
+  pickup: 0.6,
   lighten: 0.08,
   mute: 0.2,
   warmth: 0.006,
+  grainCore: 0.3,
+  localBlur: 0.9,
 };
 
 /** Pastel: very wide, dry strokes with frayed ends that drag colors from around them. */
@@ -52,28 +75,33 @@ const pastel: BrushParams = {
   grainStretch: 2.5,
   bristle: 0.75,
   bristleCount: 70,
-  pickup: 0.25,
+  pickup: 0.5,
   lighten: 0.03,
   mute: 0.1,
   colorJitter: 0.35,
+  grainCore: 0.5,
+  localBlur: 0.9,
 };
 
 /** Mottled: cloudy light and dark blotches, blended with what is already painted. */
 const mottled: BrushParams = {
   ...DEFAULT_PARAMS,
   size: 0.1,
-  opacity: 0.75,
+  opacity: 0.9,
   edgeSoftness: 0.45,
   grain: 0.55,
   grainScale: 0.002,
   grainContrast: 2,
-  bristle: 0.15,
-  mottle: 0.9,
-  mottleScale: 0.05,
+  bristle: 0.25,
+  mottle: 0.6,
+  mottleScale: 0.15,
   sampleFrom: 'composite',
-  pickup: 0.2,
+  pickup: 0.6,
   lighten: 0.07,
   mute: 0.15,
+  grainCore: 0.3,
+  localBlur: 0.9,
+  texture: 0.3,
 };
 
 /** Blur: soft watercolor-like blobs in the blurred colors right under the brush. */
@@ -92,6 +120,7 @@ const blur: BrushParams = {
   mottle: 0.15,
   mottleScale: 0.3,
   underlay: 0.7,
+  colorSource: 'pixel',
   localBlur: 0.45,
   lighten: 0,
   mute: 0,
@@ -112,6 +141,7 @@ const mosaic: BrushParams = {
   grainContrast: 4,
   bristle: 0,
   underlay: 0.9,
+  colorSource: 'pixel',
   mosaic: 0.14,
   lighten: 0,
   mute: 0,

@@ -20,6 +20,8 @@ export interface BrushParams {
 
   /** Amount of holes where the paper shows through (0 = solid). */
   grain: number;
+  /** How much of the grain reaches the solid center (0 = only the edges, 1 = everywhere). */
+  grainCore: number;
   /** Paper grain size as a fraction of the image's shorter side. */
   grainScale: number;
   /** Crispness of the grain holes (1 = soft, 8 = crisp). */
@@ -30,6 +32,8 @@ export interface BrushParams {
   bristle: number;
   /** Number of streaks across the ribbon. */
   bristleCount: number;
+  /** Light and dark flecks inside the paint, following the paper grain (0..1). */
+  texture: number;
   /** Cloudy light/dark blotches inside the paint (0..1). */
   mottle: number;
   /** Blotch size as a fraction of the brush width. */
@@ -38,12 +42,14 @@ export interface BrushParams {
   underlay: number;
 
   /**
-   * Where the paint color comes from: `local` uses the (blurred) photo right under the brush,
-   * so each part of the stroke takes the color of what it covers; `start` picks one color where
-   * the stroke begins and drags it along.
+   * Where the paint color comes from:
+   * - `local`: each part of the stroke is painted in one flat color, the average of the photo
+   *   under the brush there, so a stroke turns pink over skin and brown over hair;
+   * - `start`: one color picked where the stroke begins is dragged along;
+   * - `pixel`: every pixel takes the blurred (or mosaic-averaged) photo right under it.
    */
-  colorSource: 'local' | 'start';
-  /** Blur radius of the local color, as a fraction of the brush width. */
+  colorSource: 'local' | 'start' | 'pixel';
+  /** Radius of the area local colors are averaged over, as a fraction of the brush width. */
   localBlur: number;
   /** Mosaic cell size as a fraction of the brush width (0 = smooth, no mosaic). */
   mosaic: number;
@@ -76,16 +82,18 @@ export const DEFAULT_PARAMS: BrushParams = {
   endFeather: 0.45,
   startTaper: 0.3,
   grain: 1.0,
+  grainCore: 1,
   grainScale: 0.0009,
   grainContrast: 6,
   grainStretch: 1,
   bristle: 0.04,
   bristleCount: 18,
+  texture: 0,
   mottle: 0,
   mottleScale: 0.6,
   underlay: 0,
   colorSource: 'local',
-  localBlur: 0.35,
+  localBlur: 0.5,
   mosaic: 0,
   sampleRadius: 0.35,
   sampleFrom: 'original',

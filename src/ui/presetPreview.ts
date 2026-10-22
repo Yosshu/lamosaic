@@ -56,7 +56,6 @@ export function renderPresetPreview(params: BrushParams, localColor = false): st
     ...params,
     size: Math.min(0.6, params.size * 4.2),
     smoothing: 0,
-    colorSource: 'local',
   };
   const strokes: Array<Array<[number, number]>> = [
     [

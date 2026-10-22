@@ -1,7 +1,7 @@
 import { TILE_SIZE, TileGrid, type TileSet } from '../canvas/history';
 import { clipToBounds, union, type Rect } from '../canvas/rect';
 import type { StrokeSample } from '../input/strokePath';
-import { jitterColor, mixRgb, styleColor, type RGB } from './color';
+import { jitterColor, mixRgb, shiftColor, styleColor, type RGB } from './color';
 import {
   cloudTexture,
   createRng,
@@ -95,8 +95,12 @@ export class BrushEngine {
   private strokeCount = 0;
   private fixedColor: RGB | null = null;
   private pyramid: ColorPyramid | null = null;
-  /** Per-stroke lightness variation for local-color strokes. */
+  /** Per-stroke lightness variation for per-pixel color. */
   private localJitter = 1;
+  /** Per-stroke lightness shift and hue rotation for local color. */
+  private jitterL = 0;
+  private jitterHue = 0;
+  private readonly sampleBuffer = new Float32Array(3);
 
   constructor(doc: PixelDocument, seed = 1) {
     this.doc = doc;
@@ -122,7 +126,7 @@ export class BrushEngine {
   begin(params: BrushParams, color: RGB | null = null, seed = ++this.strokeCount): void {
     this.params = { ...params };
     this.fixedColor = color;
-    if (params.colorSource === 'local' && !color && !this.pyramid) {
+    if (params.colorSource !== 'start' && !color && !this.pyramid) {
       this.pyramid = new ColorPyramid(this.doc.originalPixels, this.doc.width, this.doc.height);
     }
     this.rng = createRng(seed * 7919 + 17);
@@ -133,6 +137,8 @@ export class BrushEngine {
     this.grainOffsetX = this.rng() * TEXTURE_SIZE;
     this.grainOffsetY = this.rng() * TEXTURE_SIZE;
     this.localJitter = 1 + (this.rng() - 0.5) * params.colorJitter * 0.16;
+    this.jitterL = (this.rng() - 0.5) * params.colorJitter * 0.12;
+    this.jitterHue = (this.rng() - 0.5) * params.colorJitter * 0.5;
     this.bristles = noise1D(
       this.rng,
       BRISTLE_LENGTH,
@@ -154,7 +160,16 @@ export class BrushEngine {
         continue;
       }
       const from = this.color;
-      if (params.pickup > 0) {
+      if (params.colorSource === 'local' && !this.fixedColor) {
+        // Each piece takes the average color under the brush where it ends. With pickup, the
+        // color follows it gradually, like paint dragged across.
+        const target = this.localColor(sample, params);
+        const step =
+          params.pickup > 0
+            ? Math.min(1, (params.pickup * (sample.distance - prev.distance)) / this.halfWidth)
+            : 1;
+        this.color = mixRgb(this.color, target, step);
+      } else if (params.pickup > 0) {
         const under = this.sampleColor(sample.x, sample.y, this.halfWidth * 0.5, params);
         const step = Math.min(
           1,
@@ -272,8 +287,23 @@ export class BrushEngine {
     }
   }
 
+  /** The styled average color of the photo under the brush at a sample. */
+  private localColor(sample: StrokeSample, params: BrushParams): RGB {
+    const radius = Math.max(1, params.localBlur * this.halfWidth * 2);
+    let picked: RGB;
+    if (params.sampleFrom === 'original' && this.pyramid) {
+      const out = this.sampleBuffer;
+      this.pyramid.smooth(sample.x, sample.y, radius, out);
+      picked = [out[0] as number, out[1] as number, out[2] as number];
+    } else {
+      picked = this.sampleColor(sample.x, sample.y, radius, params);
+    }
+    return shiftColor(styleColor(picked, params), this.jitterL, this.jitterHue);
+  }
+
   private startColor(sample: StrokeSample, params: BrushParams): RGB {
     if (this.fixedColor) return jitterColor(this.fixedColor, params.colorJitter * 0.5, this.rng);
+    if (params.colorSource === 'local') return this.localColor(sample, params);
     const radius = Math.max(1, params.sampleRadius * this.halfWidth * 2);
     const picked = this.sampleColor(sample.x, sample.y, radius, params);
     return jitterColor(styleColor(picked, params), params.colorJitter, this.rng);
@@ -384,6 +414,8 @@ export class BrushEngine {
     const hardEdge = 1 - soft;
     const taper = Math.max(1, params.startTaper * fullWidth);
     const grain = params.grain;
+    const grainCore = Math.min(1, Math.max(0, params.grainCore));
+    const texture = params.texture;
     const contrast = params.grainContrast;
     const grainStep = 1 / Math.max(0.25, params.grainScale * this.shortSide);
     const cloudStep = 8 / Math.max(1, params.mottleScale * fullWidth);
@@ -394,8 +426,8 @@ export class BrushEngine {
     const gay = this.grainAxisY * grainStep;
     const underlay = params.underlay;
     const opacity = params.opacity;
-    // Local color: each pixel takes the blurred (or mosaic-averaged) photo color under it.
-    const pyramid = params.colorSource === 'local' && !this.fixedColor ? this.pyramid : null;
+    // Per-pixel color: each pixel takes the blurred (or mosaic-averaged) photo color under it.
+    const pyramid = params.colorSource === 'pixel' && !this.fixedColor ? this.pyramid : null;
     const blurRadius = Math.max(1, params.localBlur * fullWidth);
     const mosaicBlock = params.mosaic > 0 ? Math.max(2, params.mosaic * fullWidth) : 0;
     const local = new Float32Array(3);
@@ -525,7 +557,9 @@ export class BrushEngine {
           const top = p00 + (p01 - p00) * du;
           const paperValue = top + (p10 + (p11 - p10) * du - top) * dv;
 
-          let alpha = (c - (1 - paperValue) * grain) * contrast;
+          // Holes are strongest where the paint thins out; grainCore keeps some in the center.
+          const holes = grain * (grainCore + (1 - grainCore) * (1 - c * c));
+          let alpha = (c - (1 - paperValue) * holes) * contrast;
           if (alpha > 1) alpha = 1;
           if (underlay > 0 && alpha < underlay * c) alpha = underlay * c;
           if (alpha <= 0) continue;
@@ -568,8 +602,15 @@ export class BrushEngine {
             r *= shade;
             g *= shade;
             b *= shade;
-            alpha *= 1 + m * mottle * 0.6;
+            alpha *= 1 + m * mottle * 0.3;
             if (alpha > 1) alpha = 1;
+          }
+          if (texture > 0) {
+            // Light and dark flecks from the paper tooth, like crayon dragged over rough paper.
+            const shade = 1 + (paperValue - 0.5) * texture * 0.5;
+            r *= shade;
+            g *= shade;
+            b *= shade;
           }
           const ti = (ly * tileW + (x - tile.x)) * 4;
           const ba = (base[ti + 3] as number) / 255;

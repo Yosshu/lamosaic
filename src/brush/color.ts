@@ -44,7 +44,7 @@ export function oklabToRgb({ L, a, b }: OKLab): RGB {
 export interface ColorStyle {
   /** Added to OKLab lightness (0..1 scale); positive values brighten. */
   lighten: number;
-  /** 0 keeps the chroma, 1 makes the color gray. */
+  /** 0 keeps the chroma, 1 makes the color gray; negative values make it more vivid. */
   mute: number;
   /** Shifts the hue toward rose (positive) in OKLab a/b units. */
   warmth: number;
@@ -53,7 +53,7 @@ export interface ColorStyle {
 /** The "dusty" correction: a little lighter, a little less saturated. */
 export function styleColor(rgb: RGB, style: ColorStyle): RGB {
   const lab = rgbToOklab(rgb);
-  const keep = 1 - Math.min(1, Math.max(0, style.mute));
+  const keep = 1 - Math.min(1, Math.max(-0.5, style.mute));
   return oklabToRgb({
     L: Math.min(0.97, Math.max(0.05, lab.L + style.lighten * (1 - lab.L * 0.5))),
     a: lab.a * keep + style.warmth,
@@ -64,12 +64,18 @@ export function styleColor(rgb: RGB, style: ColorStyle): RGB {
 /** Random variation of one stroke's color: lightness and a small hue rotation. */
 export function jitterColor(rgb: RGB, amount: number, rng: () => number): RGB {
   if (amount <= 0) return rgb;
-  const lab = rgbToOklab(rgb);
   const angle = (rng() - 0.5) * amount * 0.5;
+  return shiftColor(rgb, (rng() - 0.5) * amount * 0.12, angle);
+}
+
+/** Shifts OKLab lightness by `dL` and rotates the hue by `angle` radians. */
+export function shiftColor(rgb: RGB, dL: number, angle: number): RGB {
+  if (dL === 0 && angle === 0) return rgb;
+  const lab = rgbToOklab(rgb);
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
   return oklabToRgb({
-    L: Math.min(0.97, Math.max(0.03, lab.L + (rng() - 0.5) * amount * 0.12)),
+    L: Math.min(0.97, Math.max(0.03, lab.L + dL)),
     a: lab.a * cos - lab.b * sin,
     b: lab.a * sin + lab.b * cos,
   });
