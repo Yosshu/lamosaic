@@ -1,9 +1,23 @@
 # lamosaic
 
 写真の顔を、クレヨン風のストロークでおしゃれに隠すWebアプリです。
-周りの肌や髪の色を拾って塗るので、写真の雰囲気を壊さずに顔を隠せます。
+なぞった所の肌や髪の色を拾って塗るので、写真の雰囲気を壊さずに顔を隠せます。
 
-- PC・iPhone・iPad のブラウザで動きます（ホーム画面に追加すればオフラインでも使えます）
+## ▶ アプリを開く
+
+**https://yosshu.github.io/lamosaic/**
+
+PC・iPhone・iPad のブラウザでそのまま使えます。インストールは不要です。
+
+### ホーム画面に追加する
+
+アプリのように起動でき、一度開けばオフラインでも使えます。
+
+- **iPhone / iPad（Safari）**：共有ボタン →「ホーム画面に追加」
+- **PC（Chrome / Edge）**：アドレスバー右端のインストールボタン
+
+## 写真の扱い
+
 - 画像の処理はすべて端末の中で行い、どこにも送信しません
 - 保存した画像からは位置情報などのメタデータが取り除かれます
 
@@ -26,37 +40,9 @@
 
 PC のショートカット：`[` `]` サイズ、`1`〜`6` ブラシの種類、`0` 全体表示、`L` 直線、`I` スポイト、`C` 透けチェック、⌘/Ctrl+S 保存。
 
-## 開発
+## 開発者向け
 
-```sh
-npm install
-npm run dev        # 開発サーバー
-npm test           # 単体テスト（Vitest）
-npm run e2e        # 画面テスト（Playwright）
-npm run lint       # ESLint
-npm run typecheck  # 型チェック
-```
+`npm install` → `npm run dev` で起動、`npm test` / `npm run e2e` でテストします。
+`/lab.html` でブラシの質感を調整できます。`main` へのプッシュで GitHub Pages に自動公開されます。
 
-ブラシの質感は `lab.html`（開発サーバーで `/lab.html`）で、全パラメータをスライダーで調整できます。
-調整した値は JSON でコピーして `src/brush/presets.ts` に反映します。
-
-### 構成
-
-```
-src/
-  brush/   ブラシエンジン（帯の形・紙の粒・色の拾い方）、プリセット
-  canvas/  レイヤー、取り消し履歴、表示（拡大・移動）、透けチェック
-  input/   ポインター入力、軌跡の補間、ジェスチャーの振り分け
-  io/      画像の読み込みと保存
-  face/    顔検出とおまかせ下塗り
-  ui/      プリセットの見本画像
-```
-
-## 公開
-
-`main` へのプッシュで GitHub Actions が GitHub Pages に公開します
-（リポジトリの Settings → Pages → Source を「GitHub Actions」にしてください）。
-
-## ライセンス表記
-
-顔検出には [@vladmandic/face-api](https://github.com/vladmandic/face-api)（MIT License）とそのモデルを使っています（`public/models/LICENSE.txt`）。
+顔検出には [@vladmandic/face-api](https://github.com/vladmandic/face-api)（MIT License）を使っています。
