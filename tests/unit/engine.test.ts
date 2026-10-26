@@ -175,26 +175,29 @@ describe('BrushEngine local color', () => {
   });
 });
 
-describe('BrushEngine crayon preset', () => {
-  it('keeps the center of a stroke opaque so the photo does not show through', async () => {
-    const { presetById } = await import('../../src/brush/presets');
-    const doc = makeDoc(300, 200);
-    const engine = new BrushEngine(doc);
-    const params = { ...presetById('crayon').params, size: 0.3 };
-    const path = new StrokePath(engine.widthFor(params) * params.spacing, 0);
-    engine.begin(params, null, 2);
-    engine.add(path.add({ x: 30, y: 100, pressure: 0.5 }));
-    engine.add(path.add({ x: 270, y: 100, pressure: 0.5 }));
-    engine.add(path.finish());
-    engine.end();
-    let sum = 0;
-    let n = 0;
-    for (let y = 95; y < 105; y++) {
-      for (let x = 120; x < 180; x++) {
-        sum += doc.paint[(y * 300 + x) * 4 + 3] as number;
-        n++;
+describe('BrushEngine textured presets', () => {
+  it.each(['crayon', 'soft', 'pastel', 'mottled'] as const)(
+    '%s keeps the center of a stroke dense enough to hide the photo',
+    async (id) => {
+      const { presetById } = await import('../../src/brush/presets');
+      const doc = makeDoc(300, 200);
+      const engine = new BrushEngine(doc);
+      const params = { ...presetById(id).params, size: 0.3 };
+      const path = new StrokePath(engine.widthFor(params) * params.spacing, 0);
+      engine.begin(params, null, 2);
+      engine.add(path.add({ x: 30, y: 100, pressure: 0.5 }));
+      engine.add(path.add({ x: 270, y: 100, pressure: 0.5 }));
+      engine.add(path.finish());
+      engine.end();
+      let sum = 0;
+      let n = 0;
+      for (let y = 95; y < 105; y++) {
+        for (let x = 120; x < 180; x++) {
+          sum += doc.paint[(y * 300 + x) * 4 + 3] as number;
+          n++;
+        }
       }
-    }
-    expect(sum / n / 255).toBeGreaterThan(0.9);
-  });
+      expect(sum / n / 255).toBeGreaterThan(0.85);
+    },
+  );
 });

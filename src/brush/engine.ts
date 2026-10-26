@@ -596,12 +596,20 @@ export class BrushEngine {
             b = cb + db * t;
           }
           if (mottle > 0) {
-            // Cloudy blotches: lighter, denser patches next to darker, thinner ones.
+            // Cloudy blotches: pale, denser patches next to slightly darker, thinner ones. The
+            // pale side mixes toward white so blotches stay soft pastel instead of muddy gray.
             const m = cloud.sample(x * cloudStep, y * cloudStep) - 0.5;
-            const shade = 1 + m * mottle * 0.7;
-            r *= shade;
-            g *= shade;
-            b *= shade;
+            if (m > 0) {
+              const lift = m * mottle * 1.2;
+              r += (255 - r) * lift;
+              g += (255 - g) * lift;
+              b += (255 - b) * lift;
+            } else {
+              const shade = 1 + m * mottle * 0.5;
+              r *= shade;
+              g *= shade;
+              b *= shade;
+            }
             alpha *= 1 + m * mottle * 0.3;
             if (alpha > 1) alpha = 1;
           }
