@@ -201,3 +201,64 @@ describe('BrushEngine textured presets', () => {
     },
   );
 });
+
+describe('BrushEngine sharp turns', () => {
+  it('paints a clean, round turn where the stroke makes a U-turn', () => {
+    const doc = makeDoc(400, 300);
+    const engine = new BrushEngine(doc);
+    // No edge wobble or grain so the painted shape is exactly the ribbon.
+    const params = {
+      ...DEFAULT_PARAMS,
+      size: 0.3,
+      edgeWobble: 0,
+      grain: 0,
+      bristle: 0,
+      endFeather: 0.3,
+    };
+    const half = engine.widthFor(params) / 2;
+    // The app's own smoothing, as when painting with a finger.
+    const path = new StrokePath(engine.widthFor(params) * params.spacing, params.smoothing);
+    engine.begin(params, null, 1);
+    // Out and straight back, turning on the spot like a quick back-and-forth swipe.
+    const points: Array<[number, number]> = [];
+    for (let x = 60; x <= 250; x += 13) points.push([x, 140]);
+    points.push([254, 152], [250, 164]);
+    for (let x = 237; x >= 60; x -= 13) points.push([x, 170]);
+    const samples: Array<[number, number]> = [];
+    const feed = (batch: ReturnType<StrokePath['add']>) => {
+      engine.add(batch);
+      for (const s of batch) samples.push([s.x, s.y]);
+    };
+    for (const [x, y] of points) feed(path.add({ x, y, pressure: 0.5 }));
+    feed(path.finish());
+    engine.end();
+    // Around the turn, everything within the brush's half width of the (smoothed) path must be
+    // painted, and nothing farther away: no bites out of the edge and no spikes sticking out.
+    let worst = 0;
+    let holes = 0;
+    for (let y = 0; y < 300; y++) {
+      for (let x = 150; x < 400; x++) {
+        let nearest = Infinity;
+        for (let i = 1; i < samples.length; i++) {
+          nearest = Math.min(
+            nearest,
+            distanceToSegment(x + 0.5, y + 0.5, samples[i - 1]!, samples[i]!),
+          );
+        }
+        const painted = (doc.paint[(y * 400 + x) * 4 + 3] as number) > 0;
+        if (painted) worst = Math.max(worst, nearest);
+        else if (nearest < half * 0.8) holes++;
+      }
+    }
+    expect(holes).toBe(0);
+    expect(worst).toBeLessThanOrEqual(half + 2);
+  });
+});
+
+function distanceToSegment(px: number, py: number, a: [number, number], b: [number, number]) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / len2)) : 0;
+  return Math.hypot(px - a[0] - dx * t, py - a[1] - dy * t);
+}

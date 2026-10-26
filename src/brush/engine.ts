@@ -26,7 +26,7 @@ const WOBBLE_LENGTH = 1024;
 const TEX_MASK = TEXTURE_SIZE - 1;
 
 const enum Part {
-  /** The ribbon between two cross-sections. */
+  /** The ribbon along the segment between two samples. */
   Body,
   /** The fade behind the first sample. */
   StartCap,
@@ -34,19 +34,22 @@ const enum Part {
   EndCap,
 }
 
-/** A piece of ribbon. For caps, only `a` and its tangent are used. */
+/** A piece of ribbon. For caps, only `a` and the direction are used. */
 interface Piece {
   part: Part;
   ax: number;
   ay: number;
-  /** Unit tangent at a. */
-  atx: number;
-  aty: number;
   bx: number;
   by: number;
-  /** Unit tangent at b. */
-  btx: number;
-  bty: number;
+  /** Unit direction of the segment from a to b (for caps: of the stroke at its end). */
+  dx: number;
+  dy: number;
+  /**
+   * For a body piece that continues the stroke: how far (as a fraction of the half width) the
+   * round join at `a` reaches back behind the piece, filling the gap on the outside of a turn.
+   * Negative for the first piece, which starts at the stroke's start cap instead.
+   */
+  join: number;
   /** Half widths at a and b. */
   ha: number;
   hb: number;
@@ -61,9 +64,10 @@ interface Piece {
 /**
  * Paints one stroke at a time into the document's paint layer.
  *
- * A stroke is a flat ribbon swept along the path. Consecutive samples bound a piece of ribbon
- * between their cross-sections, so pieces tile the ribbon without gaps or overdraw; the start
- * and the end get a fading cap. Rasterising produces a coverage value per pixel (max-combined,
+ * A stroke is a flat ribbon swept along the path: each pair of consecutive samples gives a
+ * straight piece with square ends, and where the path turns a round join fills the gap on the
+ * outside of the turn, so even a sharp U-turn stays a clean, rounded band. The start and the end
+ * get a fading cap. Rasterising produces a coverage value per pixel (max-combined,
  * so overlapping parts of one stroke do not get darker); the paint deposited from that coverage
  * depends on the paper texture, so the low-coverage edges and ends break up into crayon-like
  * speckles. Each pixel is shaded from the stroke-start backup of the paint layer, which also
@@ -88,6 +92,10 @@ export class BrushEngine {
   private wobbleR: Float32Array = new Float32Array(WOBBLE_LENGTH);
   private grainOffsetX = 0;
   private grainOffsetY = 0;
+  /** Direction of the previous segment, for joins and the end cap. */
+  private chordX = 1;
+  private chordY = 0;
+  private hasChord = false;
   /** Direction the grain is stretched along: the stroke's initial direction. */
   private grainAxisX = 1;
   private grainAxisY = 0;
@@ -133,6 +141,7 @@ export class BrushEngine {
     this.backup = new Map();
     this.coverage = new Map();
     this.samples = [];
+    this.hasChord = false;
     this.halfWidth = this.widthFor(params) / 2;
     this.grainOffsetX = this.rng() * TEXTURE_SIZE;
     this.grainOffsetY = this.rng() * TEXTURE_SIZE;
@@ -177,12 +186,27 @@ export class BrushEngine {
         );
         this.color = mixRgb(this.color, styleColor(under, params), step);
       }
-      if (this.samples.length === 2) {
-        this.grainAxisX = Math.cos(prev.angle);
-        this.grainAxisY = Math.sin(prev.angle);
-        this.rasterize(this.piece(Part.StartCap, prev, prev, from));
+      const segX = sample.x - prev.x;
+      const segY = sample.y - prev.y;
+      const segLen = Math.hypot(segX, segY);
+      const dx = segLen > 1e-6 ? segX / segLen : this.hasChord ? this.chordX : Math.cos(prev.angle);
+      const dy = segLen > 1e-6 ? segY / segLen : this.hasChord ? this.chordY : Math.sin(prev.angle);
+      let join = -1;
+      if (this.hasChord) {
+        // The gap on the outside of a turn reaches back by sin(turn) of the half width; past a
+        // right angle it is a full half disc.
+        const cos = dx * this.chordX + dy * this.chordY;
+        const sin = Math.abs(dx * this.chordY - dy * this.chordX);
+        join = cos < 0 ? 1 : sin;
+      } else {
+        this.grainAxisX = dx;
+        this.grainAxisY = dy;
+        this.rasterize(this.piece(Part.StartCap, prev, prev, dx, dy, -1, from));
       }
-      this.rasterize(this.piece(Part.Body, prev, sample, from));
+      this.rasterize(this.piece(Part.Body, prev, sample, dx, dy, join, from));
+      this.chordX = dx;
+      this.chordY = dy;
+      this.hasChord = true;
     }
   }
 
@@ -197,6 +221,7 @@ export class BrushEngine {
     const hadSamples = this.samples.length > 0;
     const color = this.color;
     this.samples = [];
+    this.hasChord = false;
     this.add(samples.slice(0, 1));
     // Keep the color picked at the first sample so the stroke does not flicker.
     if (hadSamples) this.color = color;
@@ -214,11 +239,11 @@ export class BrushEngine {
         const a = { ...last, x: last.x - cos * len * 0.5, y: last.y - sin * len * 0.5 };
         const b = { ...last, x: last.x + cos * len * 0.5, y: last.y + sin * len * 0.5 };
         b.distance = len;
-        this.rasterize(this.piece(Part.StartCap, a, a));
-        this.rasterize(this.piece(Part.Body, a, b));
-        this.rasterize(this.piece(Part.EndCap, b, b));
+        this.rasterize(this.piece(Part.StartCap, a, a, cos, sin, -1));
+        this.rasterize(this.piece(Part.Body, a, b, cos, sin, -1));
+        this.rasterize(this.piece(Part.EndCap, b, b, cos, sin, -1));
       } else if (last) {
-        this.rasterize(this.piece(Part.EndCap, last, last));
+        this.rasterize(this.piece(Part.EndCap, last, last, this.chordX, this.chordY, -1));
       }
     }
     const record = this.backup;
@@ -313,17 +338,24 @@ export class BrushEngine {
     return 0.55 + 0.9 * Math.min(1, Math.max(0, p));
   }
 
-  private piece(part: Part, a: StrokeSample, b: StrokeSample, colorA = this.color): Piece {
+  private piece(
+    part: Part,
+    a: StrokeSample,
+    b: StrokeSample,
+    dx: number,
+    dy: number,
+    join: number,
+    colorA = this.color,
+  ): Piece {
     return {
       part,
       ax: a.x,
       ay: a.y,
-      atx: Math.cos(a.angle),
-      aty: Math.sin(a.angle),
       bx: b.x,
       by: b.y,
-      btx: Math.cos(b.angle),
-      bty: Math.sin(b.angle),
+      dx,
+      dy,
+      join,
       ha: this.halfWidth * this.pressureScale(a.pressure),
       hb: this.halfWidth * this.pressureScale(b.pressure),
       sa: a.distance,
@@ -341,38 +373,30 @@ export class BrushEngine {
     const feather = Math.max(1, params.endFeather * fullWidth);
 
     // Direction and normal of the piece.
-    let tx: number;
-    let ty: number;
-    let len: number;
-    if (p.part === Part.Body) {
-      const dx = p.bx - p.ax;
-      const dy = p.by - p.ay;
-      len = Math.hypot(dx, dy);
-      tx = len > 1e-6 ? dx / len : p.atx;
-      ty = len > 1e-6 ? dy / len : p.aty;
-    } else {
-      len = 0;
-      tx = p.atx;
-      ty = p.aty;
-    }
+    const tx = p.dx;
+    const ty = p.dy;
+    const len = p.part === Part.Body ? Math.hypot(p.bx - p.ax, p.by - p.ay) : 0;
     const nx = -ty;
     const ny = tx;
 
     // Outline used to find the pixel span on each row.
     const grow = 1 + wobble + 0.02;
     let poly: number[];
+    // How far the round join reaches back behind a body piece.
+    const back = p.part === Part.Body && p.join >= 0 ? p.join * p.ha * grow + 1 : 0;
     if (p.part === Part.Body) {
-      const ha = p.ha * grow;
-      const hb = p.hb * grow;
+      const h = Math.max(p.ha, p.hb) * grow;
+      const sx = p.ax - tx * back;
+      const sy = p.ay - ty * back;
       poly = [
-        p.ax - p.aty * ha,
-        p.ay + p.atx * ha,
-        p.bx - p.bty * hb,
-        p.by + p.btx * hb,
-        p.bx + p.bty * hb,
-        p.by - p.btx * hb,
-        p.ax + p.aty * ha,
-        p.ay - p.atx * ha,
+        sx + nx * h,
+        sy + ny * h,
+        p.bx + nx * h,
+        p.by + ny * h,
+        p.bx - nx * h,
+        p.by - ny * h,
+        sx - nx * h,
+        sy - ny * h,
       ];
     } else {
       const h = p.ha * grow;
@@ -447,7 +471,8 @@ export class BrushEngine {
     const bristles = this.bristles;
     const wobbleL = this.wobbleL;
     const wobbleR = this.wobbleR;
-    const { ax, ay, bx, by, atx, aty, btx, bty, ha, hb, sa, sb } = p;
+    const { ax, ay, ha, hb, sa, sb } = p;
+    const hasJoin = back > 0;
     const invLen = len > 1e-6 ? 1 / len : 0;
     const invFeather = 1 / feather;
     const invTaper = 1 / taper;
@@ -496,14 +521,23 @@ export class BrushEngine {
           let fade = 1;
           let t = 0;
           let s: number;
+          // Distance from the path, measured across the piece (or from `a` in the round join).
+          let dist: number;
+          const v = rx * nx + ry * ny;
           if (part === Part.Body) {
-            // Inside the piece: in front of a's cross-section and behind b's.
-            if (rx * atx + ry * aty < 0) continue;
-            if ((px - bx) * btx + (py - by) * bty >= 0) continue;
-            t = (rx * tx + ry * ty) * invLen;
-            if (t < 0) t = 0;
-            else if (t > 1) t = 1;
-            s = sa + (sb - sa) * t;
+            const u = rx * tx + ry * ty;
+            // Square end at b: the next piece (or the end cap) takes over from there.
+            if (u >= len) continue;
+            if (u < 0) {
+              // Behind a: only the round join, which fills the outside of a turn.
+              if (!hasJoin) continue;
+              dist = Math.sqrt(rx * rx + ry * ry);
+              s = sa;
+            } else {
+              t = u * invLen;
+              dist = v < 0 ? -v : v;
+              s = sa + (sb - sa) * t;
+            }
           } else {
             const u = rx * tx + ry * ty;
             const d = part === Part.StartCap ? -u : u;
@@ -511,13 +545,13 @@ export class BrushEngine {
             const f = d * invFeather;
             fade = 1 - f * f * (3 - 2 * f);
             s = part === Part.StartCap ? sa - d : sa + d;
+            dist = v < 0 ? -v : v;
           }
-          const v = rx * nx + ry * ny;
           let wi = ((s > 0 ? s : 0) * wobbleScale) | 0;
           wi %= WOBBLE_LENGTH;
           const wob = v >= 0 ? (wobbleL[wi] as number) : (wobbleR[wi] as number);
           const hw = (ha + (hb - ha) * t) * (1 + wobble * (wob * 2 - 1));
-          const e = (v < 0 ? -v : v) / hw;
+          const e = dist / hw;
           if (e >= 1) continue;
           let c = fade;
           if (e > hardEdge) {
